@@ -3,12 +3,10 @@ name: Erlang CI
 on:
   push:
     branches:
-    - develop-3.1
-    - develop-3.0
+    - nhse-develop
   pull_request:
     branches:
-    - develop-3.1
-    - develop-3.0
+    - nhse-develop
 
 jobs:
 
