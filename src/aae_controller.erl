@@ -17,40 +17,47 @@
 -include("include/aae.hrl").
 
 -export([init/1,
-            handle_call/3,
-            handle_cast/2,
-            handle_info/2,
-            terminate/2,
-            code_change/3]).
+         handle_call/3,
+         handle_cast/2,
+         handle_info/2,
+         terminate/2,
+         code_change/3]).
 
 -export([aae_start/6,
-            aae_start/7,
-            aae_start/8,
-            aae_nextrebuild/1,
-            aae_put/7,
-            aae_close/1,
-            aae_destroy/1,
-            aae_fetchroot/3,
-            aae_mergeroot/3,
-            aae_fetchbranches/4,
-            aae_mergebranches/4,
-            aae_fetchclocks/5,
-            aae_fetchclocks/7,
-            aae_rebuildtrees/5,
-            aae_rebuildtrees/4,
-            aae_rebuildstore/2,
-            aae_rebuildstore/3,
-            aae_fold/6,
-            aae_fold/8,
-            aae_bucketlist/1,
-            aae_loglevel/2,
-            aae_ping/3,
-            aae_runnerprompt/1
+         aae_start/7,
+         aae_start/8,
+         aae_nextrebuild/1,
+         aae_set_rebuild_schedule/2,
+         aae_get_rebuild_schedule/1,
+         aae_schedulenextrebuild/2,
+         aae_get_object_splitfun/1,
+         aae_set_object_splitfun/2,
+         aae_get_key_store/1,
+         aae_get_tree_caches/1,
+         aae_put/7,
+         aae_close/1,
+         aae_destroy/1,
+         aae_fetchroot/3,
+         aae_mergeroot/3,
+         aae_fetchbranches/4,
+         aae_mergebranches/4,
+         aae_fetchclocks/5,
+         aae_fetchclocks/7,
+         aae_rebuildtrees/5,
+         aae_rebuildtrees/4,
+         aae_rebuildstore/2,
+         aae_rebuildstore/3,
+         aae_fold/6,
+         aae_fold/8,
+         aae_bucketlist/1,
+         aae_loglevel/2,
+         aae_ping/3,
+         aae_runnerprompt/1
         ]).
 
 -export([foldobjects_buildtrees/2,
-            hash_clocks/2,
-            wrapped_splitobjfun/1]).
+         hash_clocks/2,
+         wrapped_splitobjfun/1]).
 
 -export([wait_on_sync/5]).
 
@@ -209,6 +216,50 @@ aae_start(
 %% When is the next keystore rebuild process scheduled for
 aae_nextrebuild(Pid) ->
     gen_server:call(Pid, rebuild_time, ?SYNC_TIMEOUT).
+
+-spec aae_schedulenextrebuild(pid(), non_neg_integer()) -> ok.
+%% @doc
+%% Schedule the next keystore rebuild, assuming last rebuild
+%% occurred now + specified delay
+aae_schedulenextrebuild(Pid, Delay) ->
+    gen_server:call(Pid, {schedule_rebuild, Delay}, ?SYNC_TIMEOUT).
+
+-spec aae_get_rebuild_schedule(pid()) -> rebuild_schedule().
+%% @doc
+%% Get rebuild schedule
+aae_get_rebuild_schedule(Pid) ->
+    gen_server:call(Pid, get_rebuild_schedule, ?SYNC_TIMEOUT).
+
+-spec aae_set_rebuild_schedule(pid(), rebuild_schedule()) -> ok.
+%% @doc
+%% Set rebuild schedule
+aae_set_rebuild_schedule(Pid, RS) ->
+    gen_server:call(Pid, {set_rebuild_schedule, RS}, ?SYNC_TIMEOUT).
+
+-spec aae_get_object_splitfun(pid()) -> function().
+%% @doc
+%% Get object_splitfun field. It is only used to infer the value of 'storeheads'.
+aae_get_object_splitfun(Pid) ->
+    gen_server:call(Pid, get_object_splitfun, ?SYNC_TIMEOUT).
+
+-spec aae_set_object_splitfun(pid(), function()) -> ok.
+%% @doc
+%% Set object_splitfun. Used to emulate re-initing the controller
+%% with a different value of 'storeheads'.
+aae_set_object_splitfun(Pid, A) ->
+    gen_server:call(Pid, {set_object_splitfun, A}, ?SYNC_TIMEOUT).
+
+-spec aae_get_key_store(pid()) -> pid() | undefined.
+%% @doc
+%% Expose key_store pid, to gather info for aae-progress-report.
+aae_get_key_store(Pid) ->
+    gen_server:call(Pid, get_key_store, ?SYNC_TIMEOUT).
+
+-spec aae_get_tree_caches(pid()) -> tree_caches().
+%% @doc
+%% Expose tree_caches, for aae-progress-report.
+aae_get_tree_caches(Pid) ->
+    gen_server:call(Pid, get_tree_caches, ?SYNC_TIMEOUT).
 
 -spec aae_put(pid(), responsible_preflist(), 
                             aae_keystore:bucket(), aae_keystore:key(),
@@ -578,6 +629,23 @@ init([Opts]) ->
 
 handle_call(rebuild_time, _From, State) ->  
     {reply, State#state.next_rebuild, State};
+handle_call(get_rebuild_schedule, _From, State = #state{rebuild_schedule = RS}) ->
+    {reply, RS, State};
+handle_call({set_rebuild_schedule, RS}, _From, State) ->
+    {reply, ok, State#state{rebuild_schedule = RS}};
+handle_call(get_object_splitfun, _From, State = #state{object_splitfun = A}) ->
+    {reply, A, State};
+handle_call({set_object_splitfun, A}, _From, State) ->
+    {reply, ok, State#state{object_splitfun = A}};
+handle_call(get_key_store, _From, State = #state{key_store = A}) ->
+    {reply, A, State};
+handle_call(get_tree_caches, _From, State = #state{tree_caches = A}) ->
+    {reply, A, State};
+handle_call({schedule_rebuild, Delay}, _From, State) ->
+    {Mega, Sec, Micros} = os:timestamp(),
+    Next = schedule_rebuild({Mega, Sec + Delay, Micros},
+                            State#state.rebuild_schedule),
+    {reply, ok, State#state{next_rebuild = Next}};
 handle_call(close, _From, State) ->
     ok = maybe_flush_puts(State#state.key_store, 
                             State#state.objectspecs_queue,
