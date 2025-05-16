@@ -9,12 +9,12 @@
          get_set_rebuild_schedule/1,
          get_set_storeheads/1]).
 
-all() -> [%dual_store_compare_medium_so,
-          %dual_store_compare_medium_ko,
-          %dual_store_compare_large_so,
-          %dual_store_compare_large_ko,
-          %store_notsupported,
-          %get_set_rebuild_schedule,
+all() -> [dual_store_compare_medium_so,
+          dual_store_compare_medium_ko,
+          dual_store_compare_large_so,
+          dual_store_compare_large_ko,
+          store_notsupported,
+          get_set_rebuild_schedule,
           get_set_storeheads
          ].
 
