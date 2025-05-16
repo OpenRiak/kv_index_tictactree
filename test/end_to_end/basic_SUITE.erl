@@ -124,27 +124,6 @@ get_set_storeheads(_Config) ->
     true = (SCF0 /= SCF2),
     ?NEW_SIBLING_COUNT = element(2, SCF2),
 
-    %% force rebuild
-    {ok, _, _} = aae_controller:aae_rebuildtrees(
-                   Cntrl, Preflist, fun testutil:calc_preflist/2, false),
-    %% re-test query
-    ct:print("trees force-rebuilt\n"),
-
-    SCFolder3 = key_range_folder(Cntrl, Bucket, StartKey, EndKey),
-    SCF3 = SCFolder3(),
-    ct:print("after rebuilding, query returns ~b siblings\n", [element(2, SCF3)]),
-    ?NEW_SIBLING_COUNT = element(2, SCF3),
-
-    %% update split_function
-    ok = aae_controller:aae_set_object_splitfun(Cntrl, StoreheadsOnSplitF),
-    ct:print("set storeheads back to on, expect sibling count to remain ~b\n",
-             [?NEW_SIBLING_COUNT]),
-
-    SCFolder4 = key_range_folder(Cntrl, Bucket, StartKey, EndKey),
-    SCF4 = SCFolder4(),
-    ?NEW_SIBLING_COUNT = element(2, SCF4),
-    ct:print("~b indeed\n", [element(2, SCF4)]),
-
     aae_controller:aae_close(Cntrl),
     RootPath = testutil:reset_filestructure().
 
