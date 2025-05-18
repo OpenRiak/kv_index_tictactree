@@ -51,7 +51,7 @@
          aae_loglevel/2,
          aae_ping/3,
          aae_runnerprompt/1,
-         aae_report/1
+         aae_produce_progress_report/1
         ]).
 
 -export([foldobjects_buildtrees/2,
@@ -519,8 +519,13 @@ aae_ping(Pid, RequestTime, From) ->
 aae_runnerprompt(Pid) ->
     gen_server:cast(Pid, runner_prompt).
 
--spec aae_report(pid()) -> list({atom(), term()}).
-aae_report(Pid) ->
+-spec aae_produce_progress_report(pid()) -> list({atom(), term()}).
+%% @doc
+%% Generate a 'progress report', with items such as status,
+%% last_rebuild, next_rebuild, for the aae controller handling this
+%% partition. This report can be displayed by `riak admin tictacaae
+%% treestatus` command.
+aae_produce_progress_report(Pid) ->
     gen_server:call(Pid, produce_report).
 
 
