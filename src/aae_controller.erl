@@ -32,8 +32,6 @@
          aae_schedulenextrebuild/2,
          aae_get_object_splitfun/1,
          aae_set_object_splitfun/2,
-         aae_get_key_store/1,
-         aae_get_tree_caches/1,
          aae_put/7,
          aae_close/1,
          aae_destroy/1,
@@ -52,7 +50,8 @@
          aae_bucketlist/1,
          aae_loglevel/2,
          aae_ping/3,
-         aae_runnerprompt/1
+         aae_runnerprompt/1,
+         aae_report/1
         ]).
 
 -export([foldobjects_buildtrees/2,
@@ -253,18 +252,6 @@ aae_get_object_splitfun(Pid) ->
 %% with a different value of 'storeheads'.
 aae_set_object_splitfun(Pid, A) ->
     gen_server:call(Pid, {set_object_splitfun, A}, ?SYNC_TIMEOUT).
-
--spec aae_get_key_store(pid()) -> pid() | undefined.
-%% @doc
-%% Expose key_store pid, to gather info for aae-progress-report.
-aae_get_key_store(Pid) ->
-    gen_server:call(Pid, get_key_store, ?SYNC_TIMEOUT).
-
--spec aae_get_tree_caches(pid()) -> tree_caches().
-%% @doc
-%% Expose tree_caches, for aae-progress-report.
-aae_get_tree_caches(Pid) ->
-    gen_server:call(Pid, get_tree_caches, ?SYNC_TIMEOUT).
 
 -spec aae_put(
     pid(),
@@ -532,6 +519,10 @@ aae_ping(Pid, RequestTime, From) ->
 aae_runnerprompt(Pid) ->
     gen_server:cast(Pid, runner_prompt).
 
+-spec aae_report(pid()) -> list({atom(), term()}).
+aae_report(Pid) ->
+    gen_server:call(Pid, produce_report).
+
 
 %%%============================================================================
 %%% gen_server callbacks
@@ -644,10 +635,6 @@ handle_call(get_object_splitfun, _From, State = #state{object_splitfun = A}) ->
     {reply, A, State};
 handle_call({set_object_splitfun, A}, _From, State) ->
     {reply, ok, State#state{object_splitfun = A}};
-handle_call(get_key_store, _From, State = #state{key_store = A}) ->
-    {reply, A, State};
-handle_call(get_tree_caches, _From, State = #state{tree_caches = A}) ->
-    {reply, A, State};
 handle_call({schedule_rebuild, Delay}, _From, State) ->
     {Mega, Sec, Micros} = os:timestamp(),
     Next = schedule_rebuild({Mega, Sec + Delay, Micros},
@@ -1013,6 +1000,9 @@ handle_call(bucket_list,  _From, State) ->
                             true),
     R = aae_keystore:store_bucketlist(State#state.key_store),
     {reply, R, State};
+handle_call(produce_report, _From, State) ->
+    R = produce_report(State),
+    {reply, R, State};
 handle_call({ping, RequestTime}, _From, State) ->
     T = max(0, timer:now_diff(os:timestamp(), RequestTime)),
     aae_util:log(aae15, [T div 1000], State#state.log_levels),
@@ -1221,6 +1211,26 @@ wrapped_splitobjfun(ObjectSplitFun) ->
                 T
         end
     end.
+
+produce_report(#state{key_store = KeyStore,
+                      next_rebuild = NextRebuild,
+                      tree_caches = TreeCaches}) ->
+    KeyStoreCurrentStatus =
+        if is_pid(KeyStore) ->
+                element(1, aae_keystore:store_currentstatus(KeyStore));
+           el/=se ->
+                not_running
+        end,
+
+    TotalDirtySegments =
+        lists:sum(
+          [aae_treecache:cache_segment_count(P) || {_, P} <- TreeCaches]),
+    [{key_store_current_status, KeyStoreCurrentStatus},
+     {last_rebuild, aae_keystore:store_last_rebuild(KeyStore)},
+     {next_rebuild, NextRebuild},
+     {total_dirty_segments, TotalDirtySegments}
+    ].
+
 
 %%%============================================================================
 %%% Internal functions
