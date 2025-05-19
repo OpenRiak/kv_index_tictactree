@@ -29,7 +29,7 @@
          aae_nextrebuild/1,
          aae_set_rebuild_schedule/2,
          aae_get_rebuild_schedule/1,
-         aae_schedulenextrebuild/2,
+         aae_prompt_nextrebuild/2,
          aae_get_object_splitfun/1,
          aae_set_object_splitfun/2,
          aae_put/7,
@@ -221,12 +221,12 @@ aae_start(
 aae_nextrebuild(Pid) ->
     gen_server:call(Pid, rebuild_time, ?SYNC_TIMEOUT).
 
--spec aae_schedulenextrebuild(pid(), non_neg_integer()) -> ok.
+-spec aae_prompt_nextrebuild(pid(), non_neg_integer()) -> ok.
 %% @doc
 %% Schedule the next keystore rebuild, assuming last rebuild
 %% occurred now + specified delay
-aae_schedulenextrebuild(Pid, Delay) ->
-    gen_server:call(Pid, {schedule_rebuild, Delay}, ?SYNC_TIMEOUT).
+aae_prompt_nextrebuild(Pid, Delay) ->
+    gen_server:call(Pid, {prompt_nextrebuild, Delay}, ?SYNC_TIMEOUT).
 
 -spec aae_get_rebuild_schedule(pid()) -> rebuild_schedule().
 %% @doc
@@ -640,7 +640,7 @@ handle_call(get_object_splitfun, _From, State = #state{object_splitfun = A}) ->
     {reply, A, State};
 handle_call({set_object_splitfun, A}, _From, State) ->
     {reply, ok, State#state{object_splitfun = A}};
-handle_call({schedule_rebuild, Delay}, _From, State) ->
+handle_call({prompt_nextrebuild, Delay}, _From, State) ->
     {Mega, Sec, Micros} = os:timestamp(),
     Next = schedule_rebuild({Mega, Sec + Delay, Micros},
                             State#state.rebuild_schedule),
