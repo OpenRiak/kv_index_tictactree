@@ -1005,8 +1005,10 @@ handle_call(bucket_list,  _From, State) ->
                             true),
     R = aae_keystore:store_bucketlist(State#state.key_store),
     {reply, R, State};
-handle_call(produce_report, _From, State) ->
-    R = produce_report(State),
+handle_call(produce_report, _From, State = #state{key_store = KeyStore,
+                                                  next_rebuild = NextRebuild,
+                                                  tree_caches = TreeCaches}) ->
+    R = produce_report(KeyStore, NextRebuild, TreeCaches),
     {reply, R, State};
 handle_call({ping, RequestTime}, _From, State) ->
     T = max(0, timer:now_diff(os:timestamp(), RequestTime)),
@@ -1217,9 +1219,7 @@ wrapped_splitobjfun(ObjectSplitFun) ->
         end
     end.
 
-produce_report(#state{key_store = KeyStore,
-                      next_rebuild = NextRebuild,
-                      tree_caches = TreeCaches}) ->
+produce_report(KeyStore, NextRebuild, TreeCaches) ->
     KeyStoreCurrentStatus =
         if is_pid(KeyStore) ->
                 element(1, aae_keystore:store_currentstatus(KeyStore));
