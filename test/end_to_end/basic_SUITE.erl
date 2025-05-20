@@ -7,7 +7,9 @@
          dual_store_compare_large_ko/1,
          store_notsupported/1,
          get_set_rebuild_schedule/1,
-         get_set_storeheads/1]).
+         get_set_storeheads/1,
+         get_set_nextrebuild/1
+        ]).
 
 all() -> [dual_store_compare_medium_so,
           dual_store_compare_medium_ko,
@@ -15,7 +17,8 @@ all() -> [dual_store_compare_medium_so,
           dual_store_compare_large_ko,
           store_notsupported,
           get_set_rebuild_schedule,
-          get_set_storeheads
+          get_set_storeheads,
+          get_set_nextrebuild
          ].
 
 init_per_suite(Config) ->
@@ -56,6 +59,34 @@ test_rebuild_schedule(Cntrl, RS0) ->
     RS3a = RS1a + 1,
     RS1b = RS3b,
     ok.
+
+get_set_nextrebuild(_Config) ->
+    RootPath = testutil:reset_filestructure(),
+    VnodePath1 = filename:join(RootPath, "vnode1/"),
+    SplitF = fun(_) -> {42, 1, 0, null} end,
+
+    {ok, Cntrl} =
+        aae_controller:aae_start({parallel, leveled_ko},
+                                 true,
+                                 {1, 300},
+                                 [{2, 0}, {2, 1}],
+                                 VnodePath1,
+                                 SplitF),
+
+    NextRebuild0 = aae_controller:aae_nextrebuild(Cntrl),
+    Now = os:timestamp(),
+    ok = aae_controller:aae_prompt_nextrebuild(Cntrl, 10),
+    NextRebuild1 = aae_controller:aae_nextrebuild(Cntrl),
+    true = (NextRebuild1 /= NextRebuild0),
+    Report = aae_controller:aae_produce_progress_report(Cntrl),
+    NextRebuild1Reported = proplists:get_value(next_rebuild, Report),
+    NextRebuild1Reported = NextRebuild1,
+    ApproxTenSec = timer:now_diff(NextRebuild1, Now) div 1000000,
+    true = (ApproxTenSec > 9),
+    true = (ApproxTenSec < 11),
+
+    aae_controller:aae_close(Cntrl),
+    testutil:reset_filestructure().
 
 -define(NKEYS, 15).
 -define(NKEYS_IN_RANGE, 9).
