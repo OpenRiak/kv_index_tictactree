@@ -1217,18 +1217,10 @@ wrapped_splitobjfun(ObjectSplitFun) ->
     end.
 
 produce_report(KeyStore, NextRebuild, TreeCaches) ->
-    KeyStoreCurrentStatus =
-        if is_pid(KeyStore) ->
-                element(1, aae_keystore:store_currentstatus(KeyStore));
-           el/=se ->
-                not_running
-        end,
-
     TotalDirtySegments =
         lists:sum(
           [aae_treecache:cache_segment_count(P) || {_, P} <- TreeCaches]),
-    [{key_store_current_status, KeyStoreCurrentStatus},
-     {last_rebuild, aae_keystore:store_last_rebuild(KeyStore)},
+    [{last_rebuild, aae_keystore:store_last_rebuild(KeyStore)},
      {next_rebuild, NextRebuild},
      {total_dirty_segments, TotalDirtySegments}
     ].
