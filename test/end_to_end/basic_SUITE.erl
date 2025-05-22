@@ -8,7 +8,8 @@
          store_notsupported/1,
          get_set_rebuild_schedule/1,
          get_set_storeheads/1,
-         get_set_nextrebuild/1
+         get_set_nextrebuild/1,
+         splitfun_compare_functions/1
         ]).
 
 all() -> [dual_store_compare_medium_so,
@@ -18,7 +19,8 @@ all() -> [dual_store_compare_medium_so,
           store_notsupported,
           get_set_rebuild_schedule,
           get_set_storeheads,
-          get_set_nextrebuild
+          get_set_nextrebuild,
+          splitfun_compare_functions
          ].
 
 init_per_suite(Config) ->
@@ -157,6 +159,47 @@ get_set_storeheads(_Config) ->
 
     aae_controller:aae_close(Cntrl),
     RootPath = testutil:reset_filestructure().
+
+
+splitfun_compare_functions(_Config) ->
+    RootPath = testutil:reset_filestructure(),
+    VnodePath = filename:join(RootPath, "vnode1/"),
+    Preflist = [{2, 0}],
+
+    SplitF_1 = mock_aae_from_object_binary_for_storeheads(true),
+    SplitF_2 = mock_aae_from_object_binary_for_storeheads(false),
+
+    {ok, Cntrl} =
+        aae_controller:aae_start({parallel, leveled_ko},
+                                 true,
+                                 {1, 300},
+                                 Preflist,
+                                 VnodePath,
+                                 SplitF_1,
+                                 [info, warn, error, critical]),  %% have one function
+
+    %% this is essentially to test that two logically identical functions
+    %% created separately, do indeed compare equal
+    true = (aae_controller:wrapped_splitobjfun(SplitF_1) ==
+                aae_controller:aae_get_object_splitfun(Cntrl)),
+    ok = aae_controller:aae_set_object_splitfun(
+           Cntrl, aae_controller:wrapped_splitobjfun(SplitF_2)),
+    true = (aae_controller:wrapped_splitobjfun(SplitF_2) ==
+                aae_controller:aae_get_object_splitfun(Cntrl)),
+
+    aae_controller:aae_close(Cntrl),
+    RootPath = testutil:reset_filestructure().
+
+-define(APOINTINTIME, {1747,917445,410090}).
+mock_aae_from_object_binary_for_storeheads(true) ->
+    fun(_ObjBin) ->
+        {_Size = 42, _SibCount = 1, 0, _LastMods = [?APOINTINTIME], <<>>}
+    end;
+mock_aae_from_object_binary_for_storeheads(false) ->
+    fun(_) ->
+        {42, 1, 0, [?APOINTINTIME], term_to_binary(null)}
+    end.
+
 
 key_range_folder(Cntrl, Bucket, StartKey, EndKey) ->
     Elements = [{sibcount, null}],
