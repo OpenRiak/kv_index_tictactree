@@ -18,16 +18,16 @@
 -define(LOG_LEVELS, [error, critical]).
 -define(EXCHANGE_PAUSE_MS, 10).
 
--define(NUMTESTS, 1000).
+-define(NUMTESTS, 10000).
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) ->
                               io:format(user, Str, Args) end, P)).
 
 
 eqc_test_() ->
-    {timeout, 120,
+    {timeout, 360,
         ?_assertEqual(true,
-            eqc:quickcheck(eqc:testing_time(60, ?QC_OUT(prop_aae()))))}.
+            eqc:quickcheck(eqc:testing_time(300, ?QC_OUT(prop_aae()))))}.
 
 run() ->
     run(?NUMTESTS).

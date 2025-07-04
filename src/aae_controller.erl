@@ -7,56 +7,65 @@
 %% - Snapshots of the KeyStore to support async object folds
 %% - Periodic requests to rebuild
 %% - Requests to startup and shutdown
-%%
-%% 
-
 
 -module(aae_controller).
 
 -behaviour(gen_server).
--include("include/aae.hrl").
+-include("aae.hrl").
 
--export([init/1,
-         handle_call/3,
-         handle_cast/2,
-         handle_info/2,
-         terminate/2,
-         code_change/3]).
+-export(
+    [
+        init/1,
+        handle_call/3,
+        handle_cast/2,
+        handle_info/2,
+        terminate/2,
+        code_change/3
+    ]
+).
 
--export([aae_start/6,
-         aae_start/7,
-         aae_start/8,
-         aae_nextrebuild/1,
-         aae_set_rebuild_schedule/2,
-         aae_get_rebuild_schedule/1,
-         aae_prompt_nextrebuild/2,
-         aae_get_object_splitfun/1,
-         aae_set_object_splitfun/2,
-         aae_put/7,
-         aae_close/1,
-         aae_destroy/1,
-         aae_fetchroot/3,
-         aae_mergeroot/3,
-         aae_fetchbranches/4,
-         aae_mergebranches/4,
-         aae_fetchclocks/5,
-         aae_fetchclocks/7,
-         aae_rebuildtrees/5,
-         aae_rebuildtrees/4,
-         aae_rebuildstore/2,
-         aae_rebuildstore/3,
-         aae_fold/6,
-         aae_fold/8,
-         aae_bucketlist/1,
-         aae_loglevel/2,
-         aae_ping/3,
-         aae_runnerprompt/1,
-         aae_produce_progress_report/1
-        ]).
+-export(
+    [
+        aae_start/6,
+        aae_start/7,
+        aae_start/8,
+        aae_start/9,
+        aae_nextrebuild/1,
+        aae_set_rebuild_schedule/2,
+        aae_get_rebuild_schedule/1,
+        aae_prompt_nextrebuild/2,
+        aae_get_object_splitfun/1,
+        aae_set_object_splitfun/2,
+        aae_put/7,
+        aae_close/1,
+        aae_destroy/1,
+        aae_fetchroot/3,
+        aae_mergeroot/3,
+        aae_fetchbranches/4,
+        aae_mergebranches/4,
+        aae_fetchclocks/5,
+        aae_fetchclocks/7,
+        aae_rebuildtrees/5,
+        aae_rebuildtrees/4,
+        aae_rebuildstore/2,
+        aae_rebuildstore/3,
+        aae_fold/6,
+        aae_fold/8,
+        aae_bucketlist/1,
+        aae_loglevel/2,
+        aae_ping/3,
+        aae_runnerprompt/1,
+        aae_produce_progress_report/1
+    ]
+).
 
--export([foldobjects_buildtrees/2,
-         hash_clocks/2,
-         wrapped_splitobjfun/1]).
+-export(
+    [
+        foldobjects_buildtrees/2,
+        hash_clocks/2,
+        wrapped_splitobjfun/1
+    ]
+).
 
 -export([wait_on_sync/5]).
 
@@ -76,23 +85,27 @@
     % May depend on x2 underlying 30s timeout
 -define(MAX_RUNNER_QUEUEDEPTH, 4).
 
--record(state, {key_store :: pid()|undefined,
-                tree_caches = [] :: tree_caches(),
-                index_ns = [] :: list(responsible_preflist()),
-                initiate_node_worker_fun,
-                object_splitfun,
-                reliable = false :: boolean(),
-                next_rebuild = os:timestamp() :: erlang:timestamp(),
-                rebuild_schedule :: rebuild_schedule(),
-                broken_trees = false :: boolean(),
-                parallel_keystore = true :: boolean(),
-                objectspecs_queue = [] :: list(),
-                root_path :: list()|undefined,
-                runner :: pid()|undefined,
-                log_levels :: aae_util:log_levels(),
-                runner_queue = [] :: list(runner_work()),
-                queue_backlog = false :: boolean(),
-                block_next_put = false :: boolean()}).
+-record(state,
+    {
+        key_store :: pid()|undefined,
+        tree_caches = [] :: tree_caches(),
+        index_ns = [] :: list(responsible_preflist()),
+        initiate_node_worker_fun,
+        object_splitfun,
+        reliable = false :: boolean(),
+        next_rebuild = os:timestamp() :: erlang:timestamp(),
+        rebuild_schedule :: rebuild_schedule(),
+        broken_trees = false :: boolean(),
+        parallel_keystore = true :: boolean(),
+        objectspecs_queue = [] :: list(),
+        root_path :: list()|undefined,
+        runner :: pid()|undefined,
+        log_levels :: aae_util:log_levels(),
+        runner_queue = [] :: list(runner_work()),
+        queue_backlog = false :: boolean(),
+        block_next_put = false :: boolean()
+    }
+).
 
 -record(options,
     {
@@ -103,7 +116,8 @@
         object_splitfun,
         root_path :: list(),
         log_levels :: aae_util:log_levels(),
-        leveled_options :: aae_keystore:leveled_options()
+        leveled_options :: aae_keystore:leveled_options(),
+        key_filter_fun = none :: key_filter_fun()
     }
 ).
     
@@ -160,12 +174,19 @@
         % to represent there was no clock to hash.  The hash of the clock part
         % impacts only 27-bits, but may be combined with a hash of the key,
         % where that has is 0..(2^32 - 1) 
+-type key_filter_fun() ::
+    none | fun((aae_keystore:bucket(), aae_keystore:key()) -> boolean()).
 
--export_type([responsible_preflist/0,
-                keystore_type/0,
-                rebuild_schedule/0,
-                version_vector/0,
-                runner_work/0]).
+-export_type(
+    [
+        responsible_preflist/0,
+        keystore_type/0,
+        rebuild_schedule/0,
+        version_vector/0,
+        runner_work/0,
+        key_filter_fun/0
+    ]
+).
 
 
 
@@ -184,6 +205,21 @@ aae_start(KeyStoreT, IsEmpty, RS, PLs, Path, ObjSplitFun, LogLevels) ->
         KeyStoreT, IsEmpty, RS, PLs, Path, ObjSplitFun, LogLevels, LeveledOpts
     ).
 
+aae_start(
+    KeyStoreT, IsEmpty, RS, PLs, Path, ObjSplitFun, LogLevels, LeveledOpts
+) ->
+    aae_start(
+        KeyStoreT,
+        IsEmpty,
+        RS,
+        PLs,
+        Path,
+        ObjSplitFun,
+        LogLevels,
+        LeveledOpts,
+        none
+    ).
+
 -spec aae_start(
     keystore_type(), 
     boolean(), 
@@ -192,15 +228,16 @@ aae_start(KeyStoreT, IsEmpty, RS, PLs, Path, ObjSplitFun, LogLevels) ->
     list(),
     object_splitter(),
     aae_util:log_levels()|undefined,
-    aae_keystore:leveled_options()) -> {ok, pid()}.
+    aae_keystore:leveled_options(),
+    key_filter_fun()) -> {ok, pid()}.
 %% @doc
 %% Start an AAE controller 
 %% The ObjectsplitFun must take a vnode object in a binary form and output 
 %% {Size, SibCount, IndexHash, LMD, MD}.  If the SplitFun previously outputted
 %% {Size, SibCount, IndexHash, null} that output will be converted
 aae_start(
-        KeyStoreT, IsEmpty, RS, PLs, Path, ObjSplitFun, LogLevels, LeveledOpts
-    ) ->
+    KeyStoreT, IsEmpty, RS, PLs, Path, ObjSplitFun, LogLevels, LeveledOpts, KFF
+) ->
     WrapObjSplitFun = wrapped_splitobjfun(ObjSplitFun),
     AAEopts =
         #options{
@@ -211,7 +248,8 @@ aae_start(
             root_path = Path,
             object_splitfun = WrapObjSplitFun,
             log_levels = LogLevels,
-            leveled_options = LeveledOpts
+            leveled_options = LeveledOpts,
+            key_filter_fun = KFF
         },
     gen_server:start(?MODULE, [AAEopts], []).
 
@@ -326,13 +364,12 @@ aae_mergebranches(Pid, IndexNs, BranchIDs, ReturnFun) ->
                     {fetch_branches, IndexNs, BranchIDs, WrappedReturnFun}).
     
 
--spec aae_fetchclocks(pid(), 
-                        list(responsible_preflist()),
-                        list(non_neg_integer()), 
-                            % fetch_clocks assumes "large" tree size
-                        returner(),
-                        null|fun((term(), term()) -> responsible_preflist()))
-                            -> ok.
+-spec aae_fetchclocks(
+    pid(), 
+    list(responsible_preflist()),
+    list(non_neg_integer()), % fetch_clocks assumes "large" tree size
+    returner(),
+    null|fun((term(), term()) -> responsible_preflist())) -> ok.
 %% @doc
 %% Fetch all the keys and clocks but use the passed in 2-arity function to 
 %% determine the IndexN of the object, by applying the function to the bucket
@@ -347,46 +384,60 @@ aae_mergebranches(Pid, IndexNs, BranchIDs, ReturnFun) ->
 aae_fetchclocks(Pid, IndexNs, SegmentIDs, ReturnFun, PrefLFun) ->
     aae_fetchclocks(Pid, IndexNs, all, SegmentIDs, all, ReturnFun, PrefLFun).
 
--spec aae_fetchclocks(pid(),
-                        list(responsible_preflist()),
-                        aae_keystore:range_limiter(),
-                        list(non_neg_integer()),
-                        aae_keystore:modified_limiter(),
-                        returner(),
-                        null|fun((term(), term()) -> responsible_preflist()))
-                            -> ok.
-aae_fetchclocks(Pid, IndexNs,
-                RLimiter, SLimiter, LMDLimiter,
-                ReturnFun, PrefLFun) ->
-    gen_server:call(Pid, 
-                    {fetch_clocks, IndexNs, 
-                        RLimiter, SLimiter, LMDLimiter,
-                        ReturnFun, PrefLFun},
-                    ?SYNC_TIMEOUT).
+-spec aae_fetchclocks(
+    pid(),
+    list(responsible_preflist()),
+    aae_keystore:range_limiter(),
+    list(non_neg_integer()),
+    aae_keystore:modified_limiter(),
+    returner(),
+    null|fun((term(), term()) -> responsible_preflist())) -> ok.
+aae_fetchclocks(
+    Pid,
+    IndexNs,
+    RLimiter, SLimiter, LMDLimiter,
+    ReturnFun, PrefLFun
+) ->
+    gen_server:call(
+        Pid, 
+        {
+            fetch_clocks,
+            IndexNs, 
+            RLimiter,
+            SLimiter,
+            LMDLimiter,
+            ReturnFun,
+            PrefLFun
+        },
+        ?SYNC_TIMEOUT
+    ).
 
--spec aae_fold(pid(), 
-                aae_keystore:range_limiter(),
-                aae_keystore:segment_limiter(),
-                fun((term(), term(), term(), term()) -> term()), 
-                any(), 
-                list(aae_keystore:value_element())) ->
-                    {async, fun(() -> term())}.
+-spec aae_fold(
+    pid(), 
+    aae_keystore:range_limiter(),
+    aae_keystore:segment_limiter(),
+    fun((term(), term(), term(), term()) -> term()), 
+    any(), 
+    list(aae_keystore:value_element())) ->
+        {async, fun(() -> term())}.
 %% @doc
 %% Return a folder to fold over the keys in the aae_keystore (or native 
 %% keystore if in native mode)
 aae_fold(Pid, RLimiter, SLimiter, FoldObjectsFun, InitAcc, Elements) ->
-    aae_fold(Pid, RLimiter, SLimiter, all, false, 
-                FoldObjectsFun, InitAcc, Elements).
+    aae_fold(
+        Pid, RLimiter, SLimiter, all, false, FoldObjectsFun, InitAcc, Elements
+    ).
 
--spec aae_fold(pid(), 
-                aae_keystore:range_limiter(),
-                aae_keystore:segment_limiter(),
-                aae_keystore:modified_limiter(),
-                aae_keystore:count_limiter(),
-                fun((term(), term(), term(), term()) -> term()),
-                any(), 
-                list(aae_keystore:value_element())) ->
-                    {async, fun(() -> term())}.
+-spec aae_fold(
+    pid(), 
+    aae_keystore:range_limiter(),
+    aae_keystore:segment_limiter(),
+    aae_keystore:modified_limiter(),
+    aae_keystore:count_limiter(),
+    fun((term(), term(), term(), term()) -> term()),
+    any(), 
+    list(aae_keystore:value_element())) ->
+        {async, fun(() -> term())}.
 %% @doc
 %% Return a folder to fold over the keys in the aae_keystore (or native 
 %% keystore if in native mode)
@@ -396,14 +447,19 @@ aae_fold(Pid, RLimiter, SLimiter, FoldObjectsFun, InitAcc, Elements) ->
 %% the request elements, so fold functions should use lists:keyfind/3 to fetch
 %% specifically requested elements rather than assuming the structure of the
 %% ElementList
-aae_fold(Pid, RLimiter, SLimiter, LMDLimiter, MaxObjectCount,
-            FoldObjectsFun, InitAcc, Elements) ->
-    gen_server:call(Pid, 
-                    {fold, 
-                        RLimiter, SLimiter, LMDLimiter, MaxObjectCount,
-                        FoldObjectsFun, InitAcc, 
-                        Elements},
-                    ?SYNC_TIMEOUT).
+aae_fold(
+    Pid,
+    RLimiter, SLimiter, LMDLimiter,
+    MaxObjectCount, FoldObjectsFun, InitAcc, Elements
+) ->
+    gen_server:call(
+        Pid, 
+        {fold, 
+            RLimiter, SLimiter, LMDLimiter, MaxObjectCount,
+            FoldObjectsFun, InitAcc, 
+            Elements},
+        ?SYNC_TIMEOUT
+    ).
 
 -spec aae_close(pid()) -> ok.
 %% @doc
@@ -456,11 +512,11 @@ aae_rebuildtrees(Pid, IndexNs, PreflistFun, WorkerFun, OnlyIfBroken) ->
 %% @doc
 %% Call aae_rebuildtrees/4 to avoid use of a passed in WorkerFun
 aae_rebuildtrees(Pid, IndexNs, PreflistFun, OnlyIfBroken) ->
-    gen_server:call(Pid,
-                    {rebuild_trees, 
-                        IndexNs, PreflistFun, 
-                        OnlyIfBroken},
-                    infinity).
+    gen_server:call(
+        Pid,
+        {rebuild_trees, IndexNs, PreflistFun, OnlyIfBroken},
+        infinity
+    ).
 
 -spec aae_rebuildstore(
     pid(),
@@ -495,8 +551,8 @@ aae_loglevel(Pid, LogLevels) ->
 aae_bucketlist(Pid) ->
     gen_server:call(Pid, bucket_list, ?SYNC_TIMEOUT).
 
--spec aae_ping(pid(), erlang:timestamp(), pid()|{sync, pos_integer()})
-                                                                -> ok|timeout.
+-spec aae_ping(
+    pid(), erlang:timestamp(), pid()|{sync, pos_integer()}) -> ok|timeout.
 %% @doc
 %% Ping the AAE process and it will return (async) the timer difference between
 %% now and the passed in timestamp.  The calling process may set a threshold, 
@@ -1414,7 +1470,7 @@ hash_clock(Clock) ->
     erlang:phash2(lists:sort(Clock)).
 
 -spec wait_on_sync(
-    atom(), atom(), pid(), tuple()|atom(), pos_integer()) -> any().
+    atom(), atom(), pid(), tuple()|atom(), pos_integer()) -> any()|timeout.
 %% @doc
 %% Wait on a sync call until timeout - but don't crash on the timeout
 wait_on_sync(Mod, Fun, Pid, Call, Timeout) ->

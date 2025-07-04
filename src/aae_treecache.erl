@@ -5,48 +5,74 @@
 
 -behaviour(gen_server).
 
--include("include/aae.hrl").
+-include("aae.hrl").
 
--export([
-            init/1,
-            handle_call/3,
-            handle_cast/2,
-            handle_info/2,
-            terminate/2,
-            code_change/3,
-            format_status/1]).
+-export(
+    [
+        init/1,
+        handle_call/3,
+        handle_cast/2,
+        handle_info/2,
+        terminate/2,
+        code_change/3,
+        format_status/1
+    ]
+).
 
--export([cache_open/3,
-         cache_new/3,
-         cache_alter/4,
-         cache_root/1,
-         cache_leaves/2,
-         cache_markdirtysegments/3,
-         cache_replacedirtysegments/3,
-         cache_destroy/1,
-         cache_startload/1,
-         cache_completeload/2,
-         cache_loglevel/2,
-         cache_close/1,
-         cache_segment_count/1]).
+-export(
+    [
+        cache_open/3,
+        cache_new/3,
+        cache_alter/4,
+        cache_root/1,
+        cache_leaves/2,
+        cache_markdirtysegments/3,
+        cache_replacedirtysegments/3,
+        cache_destroy/1,
+        cache_startload/1,
+        cache_completeload/2,
+        cache_loglevel/2,
+        cache_close/1,
+        cache_segment_count/1
+    ]
+).
 
 -define(PENDING_EXT, ".pnd").
 -define(FINAL_EXT, ".aae").
 -define(START_SQN, 1).
 -define(SYNC_TIMEOUT, 30000).
 
--record(state, {save_sqn = 0 :: integer(),
-                is_restored = false :: boolean(),
-                tree :: leveled_tictac:tictactree()|undefined,
-                root_path :: list()|undefined,
-                partition_id :: integer()|undefined,
-                loading = false :: boolean(),
-                dirty_segments = [] :: list(),
-                active_fold :: string()|undefined,
-                change_queue = [] :: list()|redacted,
-                queued_changes = 0 :: non_neg_integer(),
-                log_levels :: aae_util:log_levels(),
-                safe_save = false :: boolean()}).
+-record(state, 
+    {
+        save_sqn = 0 :: integer(),
+        is_restored = false :: boolean(),
+        tree :: tictactree()|undefined,
+        root_path :: list()|undefined,
+        partition_id :: integer()|undefined,
+        loading = false :: boolean(),
+        dirty_segments = [] :: list(),
+        active_fold :: string()|undefined,
+        change_queue = [] :: list()|redacted,
+        queued_changes = 0 :: non_neg_integer(),
+        log_levels :: aae_util:log_levels(),
+        safe_save = false :: boolean()
+    }
+).
+
+-record(tictactree,
+    {
+        treeID :: any(),
+        size  :: tree_size(),
+        width :: integer(),
+        segment_count :: integer(),
+        level1 :: level1_map(),
+        level2 :: array:array(binary())
+    }
+).
+
+-type tree_size() :: xxsmall|xsmall|small|medium|large|xlarge.
+-type level1_map() :: #{non_neg_integer() => binary()}|binary().
+-type tictactree() :: #tictactree{}.
 
 -type partition_id() :: integer()|{integer(), integer()}.
 
@@ -78,7 +104,8 @@ cache_new(RootPath, PartitionID, LogLevels) ->
             {partition_id, PartitionID}, 
             {ignore_disk, true},
             {log_levels, LogLevels}],
-    gen_server:start_link(?MODULE, [Opts], []).
+    {ok, Pid} = gen_server:start_link(?MODULE, [Opts], []),
+    {ok, Pid}.
 
 -spec cache_destroy(pid()) -> ok.
 %% @doc
@@ -152,7 +179,7 @@ cache_replacedirtysegments(Pid, ReplacementSegments, FoldGUID) ->
 cache_startload(Pid) ->
     gen_server:cast(Pid, start_load).
 
--spec cache_completeload(pid(), leveled_tictac:tictactree()) -> ok.
+-spec cache_completeload(pid(), tictactree()) -> ok.
 %% @doc
 %% Take a tree which has been produced from a fold of the KeyStore, and make 
 %% this the new tree
@@ -211,13 +238,12 @@ handle_call({fetch_leaves, BranchIDs}, _From, State) ->
 handle_call(segment_count, _From, State = #state{dirty_segments = A}) ->
     {reply, length(A), State};
 handle_call(close, _From, State) ->
-    case State#state.safe_save of
-        true ->
-            save_to_disk(State#state.root_path, 
-                            State#state.save_sqn, 
-                            State#state.tree,
-                            State#state.log_levels);
-        false ->
+    case {State#state.safe_save, State#state.root_path, State#state.tree} of
+        {true, RP, Tree} when RP =/= undefined, Tree =/= undefined ->
+            save_to_disk(
+                RP, State#state.save_sqn, Tree, State#state.log_levels
+            );
+        _ ->
             ok
     end,
     {stop, normal, ok, State}.
@@ -358,7 +384,7 @@ flatten_id(ID) ->
     integer_to_list(ID).
 
 -spec save_to_disk(
-    list(), integer(), leveled_tictac:tictactree(), aae_util:log_levels())
+    list(), integer(), tictactree(), aae_util:log_levels())
         -> ok.
 %% @doc
 %% Save the TreeCache to disk, with a checksum so thatit can be 
@@ -377,7 +403,7 @@ save_to_disk(RootPath, SaveSQN, TreeCache, LogLevels) ->
 
 -spec open_from_disk(
     list(), aae_util:log_levels())
-        -> {leveled_tictac:tictactree()|none, integer()}.
+        -> {tictactree()|none, integer()}.
 %% @doc
 %% Open most recently saved TicTac tree cache file on disk, deleting all 
 %% others both used and unused - to save an out of date tree from being used
@@ -489,12 +515,14 @@ alterhash_fun(Key, {CurrentHash, OldHash}) ->
 
 setup_savedcaches(RootPath) ->
     Tree0 = leveled_tictac:new_tree(test),
-    Tree1 = leveled_tictac:add_kv(Tree0, 
-                                    {<<"K1">>}, {<<"V1">>}, 
-                                    fun({K}, {V}) -> {K, V} end),
-    Tree2 = leveled_tictac:add_kv(Tree1, 
-                                    {<<"K2">>}, {<<"V2">>}, 
-                                    fun({K}, {V}) -> {K, V} end),
+    Tree1 =
+        leveled_tictac:add_kv(
+            Tree0, {<<"K1">>}, {<<"V1">>}, fun({K}, {V}) -> {K, V} end
+        ),
+    Tree2 =
+        leveled_tictac:add_kv(
+            Tree1, {<<"K2">>}, {<<"V2">>}, fun({K}, {V}) -> {K, V} end
+        ),
     ok = save_to_disk(RootPath, 1, Tree1, undefined),
     ok = save_to_disk(RootPath, 2, Tree2, undefined),
     Tree2.
@@ -661,16 +689,20 @@ simple_test() ->
     KHL0 = lists:sublist(InitialKeys, 60) ++ AlternateKeys,
     DirectAddFun =
         fun({K, H}, TreeAcc) ->
-            leveled_tictac:add_kv(TreeAcc, 
-                                    K, H, 
-                                    fun(Key, Value) -> 
-                                        {Key, {is_hash, Value}} 
-                                    end)
+            leveled_tictac:add_kv(
+                TreeAcc, 
+                K, H, 
+                fun(Key, Value) -> 
+                    {Key, {is_hash, Value}} 
+                end
+            )
         end,
     CompareTree = 
-        lists:foldl(DirectAddFun, 
-                        leveled_tictac:new_tree(raw, ?TREE_SIZE), 
-                        KHL0),
+        lists:foldl(
+            DirectAddFun, 
+            leveled_tictac:new_tree(raw, ?TREE_SIZE), 
+            KHL0
+        ),
     CompareRoot = leveled_tictac:fetch_root(CompareTree),
     Root = cache_root(AAECache1),
     ?assertMatch(Root, CompareRoot),
@@ -706,7 +738,7 @@ replace_test() ->
             leveled_tictac:add_kv(
                 TreeAcc, 
                 K, H, 
-                fun(Key, Value) ->  {Key, {is_hash, Value}} end
+                fun(Key, Value) -> {Key, {is_hash, Value}} end
             )
         end,
     CompareTree = 
@@ -832,19 +864,13 @@ dirty_segment_test() ->
     cache_replacedirtysegments(AAECache0, [{S0, Leaf0}], GUID2),
     % Replace has been ignored due to load - so still Leaf2
     ?assertMatch(Leaf2, get_leaf(AAECache0, BranchID, LeafID)),
-
-
     ok = cache_destroy(AAECache0).
-
-
 
 get_leaf(AAECache0, BranchID, LeafID) ->
     [{BranchID, LeafBin}] = cache_leaves(AAECache0, [BranchID]),
     LeafStartPos = LeafID * 4,
     <<_Pre:LeafStartPos/binary, Leaf:32/integer, _Rest/binary>> = LeafBin,
     Leaf.
-
-
 
 coverage_cheat_test() ->
     {ok, _State1} = code_change(null, #state{}, null),

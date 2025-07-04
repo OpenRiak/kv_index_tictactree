@@ -5,19 +5,28 @@
 
 -module(aae_util).
 
--include("include/aae.hrl").
+-include("aae.hrl").
 
--export([log/2,
-            log/3,
-            log_timer/4,
-            get_opt/2,
-            get_opt/3,
-            make_binarykey/2,
-            safe_open/1]).
+-export(
+    [
+        log/2,
+        log/3,
+        log_timer/4,
+        get_opt/2,
+        get_opt/3,
+        make_binarykey/2,
+        safe_open/1,
+        apply_key_filter/3
+    ]
+).
 
--export([clean_subdir/1,
-            test_key_generator/1,
-            flip_byte/3]).         
+-export(
+    [
+        clean_subdir/1,
+        test_key_generator/1,
+        flip_byte/3
+    ]
+).         
 
 -ifdef(TEST).
 -export([get_segmentid/2]).
@@ -25,7 +34,8 @@
 
 -define(DEFAULT_LOG_LEVELS, [warning, error, critical]).
 
--type log_levels() :: list(leveled_log:log_level())|undefined.
+-type log_levels() ::
+    list(debug | info | warning | error | critical)|undefined.
 
 -export_type([log_levels/0]).
 
@@ -165,14 +175,14 @@
 log(LogReference, Subs) ->
     log(LogReference, Subs, undefined).
 
--spec log(atom(), list(), aae_util:log_levels()) -> term().
+-spec log(atom(), list(), log_levels()) -> term().
 log(LogReference, Subs, undefined) ->
     log(LogReference, Subs, ?DEFAULT_LOG_LEVELS);
 log(LogReference, Subs, LogLevels) ->
     leveled_log:log(LogReference, Subs, LogLevels, ?LOGBASE, tictacaae).
 
 -spec log_timer(
-    atom(), list(), erlang:timestamp(), aae_util:log_levels()) -> term().
+    atom(), list(), erlang:timestamp(), log_levels()) -> term().
 log_timer(LogReference, Subs, StartTime, undefined) ->
     log_timer(LogReference, Subs, StartTime, ?DEFAULT_LOG_LEVELS);
 log_timer(LogReference, Subs, StartTime, LogLevels) ->
@@ -197,7 +207,6 @@ get_opt(Key, Opts, Default) ->
             Value
     end.
 
-
 -spec make_binarykey(aae_keystore:bucket(), aae_keystore:key()) -> binary().
 %% @doc
 %% Convert Bucket and Key into a single binary 
@@ -206,6 +215,15 @@ make_binarykey({Type, Bucket}, Key)
     <<Type/binary, Bucket/binary, Key/binary>>;
 make_binarykey(Bucket, Key) when is_binary(Bucket), is_binary(Key) ->
     <<Bucket/binary, Key/binary>>.
+
+-spec apply_key_filter(
+    aae_controller:key_filter_fun(),
+    aae_keystore:bucket(),
+    aae_keystore:key()) -> boolean().
+apply_key_filter(none, _Bucket, _Key) ->
+    true;
+apply_key_filter(KeyFilterFun, Bucket, Key) ->
+    KeyFilterFun(Bucket, Key).
 
 %%%============================================================================
 %%% Internal functions
@@ -277,20 +295,22 @@ clean_subdir(DirPath) ->
     case filelib:is_dir(DirPath) of
         true ->
             {ok, Files} = file:list_dir(DirPath),
-            lists:foreach(fun(FN) ->
-                                File = filename:join(DirPath, FN),
-                                io:format("Attempting deletion ~s~n", [File]),
-                                ok = 
-                                    case filelib:is_dir(File) of 
-                                        true -> 
-                                            clean_subdir(File),
-                                            file:del_dir(File);
-                                        false -> 
-                                            file:delete(File) 
-                                    end,
-                                io:format("Success deleting ~s~n", [File])
-                                end,
-                            Files);
+            lists:foreach(
+                fun(FN) ->
+                    File = filename:join(DirPath, FN),
+                    io:format("Attempting deletion ~s~n", [File]),
+                    ok = 
+                        case filelib:is_dir(File) of 
+                            true -> 
+                                clean_subdir(File),
+                                file:del_dir(File);
+                            false -> 
+                                file:delete(File) 
+                        end,
+                    io:format("Success deleting ~s~n", [File])
+                    end,
+                Files
+            );
         false ->
             ok
     end.
