@@ -93,7 +93,7 @@
             [{gen_fsm, start, 3},
                 {gen_fsm, send_event, 2}]}).
 
--include("include/aae.hrl").
+-include("aae.hrl").
 
 -define(TRANSITION_PAUSE_MS, 500).
     % A pause between phases - allow queue lengths to change, and avoid
@@ -151,39 +151,43 @@
             start/7,
             reply/3]).
 
--record(state, {root_compare_deltas = [] :: list(),
-                branch_compare_deltas = [] :: list(),
-                tree_compare_deltas = [] :: list(),
-                key_deltas = [] :: list(),
-                repair_fun :: repair_fun()|undefined,
-                reply_fun :: reply_fun()|undefined,
-                blue_list = [] :: input_list(),
-                pink_list = [] :: input_list(),
-                exchange_id = "not_set" :: list(),
-                blue_returns = {0, 0} :: {integer(), integer()},
-                pink_returns = {0, 0} :: {integer(), integer()},
-                pink_acc,
-                blue_acc,
-                merge_fun,
-                start_time = os:timestamp() :: erlang:timestamp(),
-                pending_state :: atom(),
-                reply_timeout = 0 :: integer(),
-                exchange_type :: exchange_type(),
-                exchange_filters = none :: filters(),
-                last_tree_compare = none :: list(non_neg_integer())|none,
-                last_root_compare = none :: list(non_neg_integer())|none,
-                last_branch_compare = none :: list(non_neg_integer())|none,
-                tree_compares = 0 :: integer(),
-                root_compares = 0 :: integer(),
-                branch_compares = 0 :: integer(),
-                prethrottle_branches = 0 :: non_neg_integer(),
-                prethrottle_leaves = 0 :: non_neg_integer(),
-                transition_pause_ms = ?TRANSITION_PAUSE_MS :: pos_integer(),
-                log_levels :: aae_util:log_levels(),
-                scan_timeout = ?SCAN_TIMEOUT_MS :: non_neg_integer(),
-                max_results = ?MAX_RESULTS :: pos_integer(),
-                purpose :: atom()|undefined
-                }).
+-record(state,
+    {
+        root_compare_deltas = [] :: list(),
+        branch_compare_deltas = [] :: list(),
+        tree_compare_deltas = [] :: list(),
+        key_deltas = [] :: list(),
+        repair_fun :: repair_fun()|undefined,
+        reply_fun :: reply_fun()|undefined,
+        blue_list = [] :: input_list(),
+        pink_list = [] :: input_list(),
+        exchange_id = "not_set" :: list(),
+        blue_returns = {0, 0} :: {integer(), integer()},
+        pink_returns = {0, 0} :: {integer(), integer()},
+        pink_acc,
+        blue_acc,
+        merge_fun,
+        start_time = os:timestamp() :: erlang:timestamp(),
+        pending_state :: atom(),
+        reply_timeout = 0 :: integer(),
+        exchange_type :: exchange_type(),
+        exchange_filters = none :: filters(),
+        last_tree_compare = none :: list(non_neg_integer())|none,
+        last_root_compare = none :: list(non_neg_integer())|none,
+        last_branch_compare = none :: list(non_neg_integer())|none,
+        tree_compares = 0 :: integer(),
+        root_compares = 0 :: integer(),
+        branch_compares = 0 :: integer(),
+        prethrottle_branches = 0 :: non_neg_integer(),
+        prethrottle_leaves = 0 :: non_neg_integer(),
+        transition_pause_ms = ?TRANSITION_PAUSE_MS :: pos_integer(),
+        log_levels :: aae_util:log_levels(),
+        scan_timeout = ?SCAN_TIMEOUT_MS :: non_neg_integer(),
+        max_results = ?MAX_RESULTS :: pos_integer(),
+        purpose :: atom()|undefined,
+        key_filter_fun = none :: aae_controller:key_filter_fun()
+    }
+).
 
 -type branch_results() :: list({integer(), binary()}).
     % Results to branch queries are a list mapping Branch ID to the binary for
@@ -272,12 +276,17 @@ start(BlueList, PinkList, RepairFun, ReplyFun) ->
 %% closing state and the cout of deltas.  
 start(Type, BlueList, PinkList, RepairFun, ReplyFun, Filters, Opts) ->
     ExchangeID = leveled_util:generate_uuid(),
-    {ok, ExPID} = gen_fsm:start(?MODULE, 
-                                [{Type, Filters}, 
-                                    BlueList, PinkList, RepairFun, ReplyFun,
-                                    ExchangeID,
-                                    Opts], 
-                                []),
+    {ok, ExPID} =
+        gen_fsm:start(
+            ?MODULE, 
+            [
+                {Type, Filters}, 
+                BlueList, PinkList, RepairFun, ReplyFun,
+                ExchangeID,
+                Opts
+            ], 
+            []
+        ),
     {ok, ExPID, ExchangeID}.
 
 
@@ -297,15 +306,18 @@ init([{Type, Filters},
         BlueList, PinkList, RepairFun, ReplyFun, ExChID, Opts]) ->
     PinkTarget = length(PinkList),
     BlueTarget = length(BlueList),
-    State = #state{blue_list = BlueList, 
-                    pink_list = PinkList,
-                    repair_fun = RepairFun,
-                    reply_fun = ReplyFun,
-                    exchange_id = ExChID,
-                    pink_returns = {PinkTarget, PinkTarget},
-                    blue_returns = {BlueTarget, BlueTarget},
-                    exchange_type = Type,
-                    exchange_filters = Filters},
+    State =
+        #state{
+            blue_list = BlueList, 
+            pink_list = PinkList,
+            repair_fun = RepairFun,
+            reply_fun = ReplyFun,
+            exchange_id = ExChID,
+            pink_returns = {PinkTarget, PinkTarget},
+            blue_returns = {BlueTarget, BlueTarget},
+            exchange_type = Type,
+            exchange_filters = Filters
+        },
     State0 = process_options(Opts, State),
     aae_util:log(
         ex001,
@@ -535,7 +547,21 @@ clock_compare(timeout, State) ->
         [State#state.blue_acc, State#state.pink_acc],
         State#state.log_levels
     ),
-    RepairKeys = compare_clocks(State#state.blue_acc, State#state.pink_acc),
+    FilterFun =
+        fun({B, K, _VC}) ->
+            aae_util:apply_key_filter(State#state.key_filter_fun, {B, K})
+        end,
+    FilteredBlues = lists:filter(FilterFun, State#state.blue_acc),
+    FilteredPinks = lists:filter(FilterFun, State#state.pink_acc),
+    aae_util:log(
+        ex011,
+        [
+            length(State#state.blue_acc) - length(FilteredBlues),
+            length(State#state.pink_acc) - length(FilteredPinks)
+        ],
+        State#state.log_levels
+    ),
+    RepairKeys = compare_clocks(FilteredBlues, FilteredPinks),
     RepairFun = State#state.repair_fun,
     aae_util:log(
         ex004,
@@ -779,21 +805,29 @@ estimated_damage(BrokenBranches, BrokenLeaves, MaxResults) ->
 %% Alter state reflecting any passed in options
 process_options([], State) ->
     State;
-process_options([{transition_pause_ms, PauseMS}|Tail], State)
-                                                when is_integer(PauseMS) ->
+process_options(
+    [{transition_pause_ms, PauseMS}|Tail], State)
+        when is_integer(PauseMS) ->
     process_options(Tail, State#state{transition_pause_ms = PauseMS});
-process_options([{log_levels, LogLevels}|Tail], State)
-                                                when is_list(LogLevels) ->
+process_options(
+    [{log_levels, LogLevels}|Tail], State) 
+        when is_list(LogLevels) ->
     process_options(Tail, State#state{log_levels = LogLevels});
-process_options([{scan_timeout, Timeout}|Tail], State)
-                                                when is_integer(Timeout) ->
+process_options(
+    [{scan_timeout, Timeout}|Tail], State) 
+        when is_integer(Timeout) ->
     process_options(Tail, State#state{scan_timeout = Timeout});
-process_options([{max_results, MaxResults}|Tail], State)
-                                                when is_integer(MaxResults) ->
+process_options(
+    [{max_results, MaxResults}|Tail], State)
+        when is_integer(MaxResults) ->
     process_options(Tail, State#state{max_results = MaxResults});
-process_options([{purpose, Purpose}|Tail], State) 
-                                                when is_atom(Purpose) ->
-    process_options(Tail, State#state{purpose = Purpose}).
+process_options(
+    [{purpose, Purpose}|Tail], State) 
+        when is_atom(Purpose) ->
+    process_options(Tail, State#state{purpose = Purpose});
+process_options([{key_filter_fun, KFF}|Tail], State)
+        when is_function(KFF, 1) ->
+    process_options(Tail, State#state{key_filter_fun = KFF}).
 
 -spec trigger_next(any(), atom(), fun(), any(), boolean(), 
                                         integer(), exchange_state()) -> any().

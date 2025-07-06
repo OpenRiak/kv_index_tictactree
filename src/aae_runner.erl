@@ -5,7 +5,7 @@
 -module(aae_runner).
 
 -behaviour(gen_server).
--include("include/aae.hrl").
+-include("aae.hrl").
 
 -export([init/1,
             handle_call/3,

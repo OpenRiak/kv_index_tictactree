@@ -37,12 +37,14 @@ get_set_rebuild_schedule(_Config) ->
     RS0 = {1, 300},
 
     {ok, Cntrl} =
-        aae_controller:aae_start({parallel, leveled_ko},
-                                 true,
-                                 RS0,
-                                 [{2, 0}, {2, 1}],
-                                 VnodePath1,
-                                 SplitF),
+        aae_controller:aae_start(
+            {parallel, leveled_ko},
+            true,
+            RS0,
+            [{2, 0}, {2, 1}],
+            VnodePath1,
+            SplitF
+        ),
 
     ok = test_rebuild_schedule(Cntrl, RS0),
 
@@ -68,12 +70,14 @@ get_set_nextrebuild(_Config) ->
     SplitF = fun(_) -> {42, 1, 0, null} end,
 
     {ok, Cntrl} =
-        aae_controller:aae_start({parallel, leveled_ko},
-                                 true,
-                                 {1, 300},
-                                 [{2, 0}, {2, 1}],
-                                 VnodePath1,
-                                 SplitF),
+        aae_controller:aae_start(
+            {parallel, leveled_ko},
+            true,
+            {1, 300},
+            [{2, 0}, {2, 1}],
+            VnodePath1,
+            SplitF
+        ),
 
     NextRebuild0 = aae_controller:aae_nextrebuild(Cntrl),
     Now = os:timestamp(),
@@ -104,13 +108,15 @@ get_set_storeheads(_Config) ->
     StoreheadsOffSplitF = fun(_) -> {42, _DoubleSiblingCount = 2, 0, undefined, <<>>} end,
 
     {ok, Cntrl} =
-        aae_controller:aae_start({parallel, leveled_ko},
-                                 true,
-                                 {1, 300},
-                                 Preflist,
-                                 VnodePath,
-                                 StoreheadsOffSplitF,
-                                 [info, warn, error, critical]),  %% have one function
+        aae_controller:aae_start(
+            {parallel, leveled_ko},
+            true,
+            {1, 300},
+            Preflist,
+            VnodePath,
+            StoreheadsOffSplitF,
+            [info, warn, error, critical]
+        ),
 
     Bucket = <<"b1">>,
     BKVList = testutil:gen_keys([], ?NKEYS, Bucket),
@@ -170,13 +176,15 @@ splitfun_compare_functions(_Config) ->
     SplitF_2 = mock_aae_from_object_binary_for_storeheads(false),
 
     {ok, Cntrl} =
-        aae_controller:aae_start({parallel, leveled_ko},
-                                 true,
-                                 {1, 300},
-                                 Preflist,
-                                 VnodePath,
-                                 SplitF_1,
-                                 [info, warn, error, critical]),  %% have one function
+        aae_controller:aae_start(
+            {parallel, leveled_ko},
+            true,
+            {1, 300},
+            Preflist,
+            VnodePath,
+            SplitF_1,
+            [info, warn, error, critical]
+        ),
 
     %% this is essentially to test that two logically identical functions
     %% created separately, do indeed compare equal
@@ -229,30 +237,32 @@ store_notsupported(_Config) ->
     RepairFun = fun(_KL) -> null end,  
 
     {ok, Cntrl1} = 
-        aae_controller:aae_start({parallel, leveled_ko}, 
-                                    true, 
-                                    {1, 300}, 
-                                    [{2, 0}, {2, 1}], 
-                                    VnodePath1, 
-                                    SplitF,
-                                    [info, warn, error, critical]),
+        aae_controller:aae_start(
+            {parallel, leveled_ko}, 
+            true, 
+            {1, 300}, 
+            [{2, 0}, {2, 1}], 
+            VnodePath1, 
+            SplitF,
+            [info, warn, error, critical]
+        ),
     
     BKVList = testutil:gen_keys([], 100),
     ok = testutil:put_keys(Cntrl1, 2, BKVList, none),
 
     {ok, _P1, GUID1} = 
-        aae_exchange:start([{exchange_sendfun(Cntrl1), [{2,0}]}],
-                                [{exchange_notsupported_sendfun(), [{3, 0}]}],
-                                RepairFun,
-                                ReturnFun),
+        aae_exchange:start(
+            [{exchange_sendfun(Cntrl1), [{2,0}]}],
+            [{exchange_notsupported_sendfun(), [{3, 0}]}],
+            RepairFun,
+            ReturnFun)
+            ,
     io:format("Exchange id ~s~n", [GUID1]),
     {ExchangeState1, 0} = testutil:start_receiver(),
     io:format("ExchangeState ~w~n", [ExchangeState1]),
     true = ExchangeState1 == not_supported,
     aae_controller:aae_close(Cntrl1),
     RootPath = testutil:reset_filestructure().
-
-
 
 
 dual_store_compare_medium_so(_Config) ->
@@ -290,54 +300,65 @@ dual_store_compare_tester(InitialKeyCount, StoreType) ->
     ReturnFun = fun(R) -> RPid ! {result, R} end,
     RepairFun = fun(_KL) -> null end,  
 
+    %% Add a key filter fun that never matches
+    KFF = fun({B, _K}) -> B =/= <<"SkipThisBucket">> end, 
+
     {ok, Cntrl1} = 
-        aae_controller:aae_start({parallel, StoreType}, 
-                                    true, 
-                                    {1, 300}, 
-                                    [{2, 0}, {2, 1}], 
-                                    VnodePath1, 
-                                    SplitF,
-                                    [warn, error, critical]),
+        aae_controller:aae_start(
+            {parallel, StoreType}, 
+            true, 
+            {1, 300}, 
+            [{2, 0}, {2, 1}], 
+            VnodePath1, 
+            SplitF,
+            [warn, error, critical],
+            [],
+            KFF
+        ),
     {ok, Cntrl2} = 
-        aae_controller:aae_start({parallel, StoreType}, 
-                                    true, 
-                                    {1, 300}, 
-                                    [{3, 0}, {3, 1}, {3, 2}], 
-                                    VnodePath2, 
-                                    SplitF,
-                                    [warn, error, critical]),
+        aae_controller:aae_start(
+            {parallel, StoreType}, 
+            true, 
+            {1, 300}, 
+            [{3, 0}, {3, 1}, {3, 2}], 
+            VnodePath2, 
+            SplitF,
+            [warn, error, critical],
+            [],
+            KFF
+        ),
     
     initial_load(InitialKeyCount, Cntrl1, Cntrl2),
 
     SW1 = os:timestamp(),
 
-    ok = aae_controller:aae_mergeroot(Cntrl1, 
-                                        [{2, 0}, {2, 1}], 
-                                        ReturnFun),
+    ok =
+        aae_controller:aae_mergeroot(
+            Cntrl1, [{2, 0}, {2, 1}], ReturnFun),
     Root1A = testutil:start_receiver(),
-    ok = aae_controller:aae_mergeroot(Cntrl2, 
-                                        [{3, 0}, {3, 1}, {3, 2}], 
-                                        ReturnFun),
+    ok =
+        aae_controller:aae_mergeroot(
+            Cntrl2, [{3, 0}, {3, 1}, {3, 2}], ReturnFun),
     Root2A = testutil:start_receiver(),
     true = Root1A == Root2A,
 
-    ok = aae_controller:aae_fetchroot(Cntrl1, 
-                                        [{2, 0}], 
-                                        ReturnFun),
+    ok =
+        aae_controller:aae_fetchroot(
+            Cntrl1, [{2, 0}], ReturnFun),
     [{{2, 0}, Root1B}] = testutil:start_receiver(),
-    ok = aae_controller:aae_fetchroot(Cntrl2, 
-                                        [{3, 0}], 
-                                        ReturnFun),
+    ok =
+        aae_controller:aae_fetchroot(
+            Cntrl2, [{3, 0}], ReturnFun),
     [{{3, 0}, Root2B}] = testutil:start_receiver(),
     true = Root1B == Root2B,
 
-    ok = aae_controller:aae_mergeroot(Cntrl1, 
-                                        [{2, 1}], 
-                                        ReturnFun),
+    ok =
+        aae_controller:aae_mergeroot(
+            Cntrl1, [{2, 1}], ReturnFun),
     Root1C = testutil:start_receiver(),
-    ok = aae_controller:aae_mergeroot(Cntrl2, 
-                                        [{3, 1}, {3, 2}], 
-                                        ReturnFun),
+    ok =
+        aae_controller:aae_mergeroot(
+            Cntrl2, [{3, 1}, {3, 2}], ReturnFun),
     Root2C = testutil:start_receiver(),
     true = Root1C == Root2C,
 
@@ -369,19 +390,23 @@ dual_store_compare_tester(InitialKeyCount, StoreType) ->
     SCInitAcc = {[], 0},
 
     {async, SCFolder1} = 
-        aae_controller:aae_fold(Cntrl1, 
-                                {key_range, Bucket, StartKey, EndKey},
-                                all,
-                                SCFoldFun, 
-                                SCInitAcc,
-                                Elements),
+        aae_controller:aae_fold(
+            Cntrl1, 
+            {key_range, Bucket, StartKey, EndKey},
+            all,
+            SCFoldFun, 
+            SCInitAcc,
+            Elements
+        ),
     {async, SCFolder2} = 
-        aae_controller:aae_fold(Cntrl2, 
-                                {key_range, Bucket, StartKey, EndKey},
-                                all,
-                                SCFoldFun, 
-                                SCInitAcc,
-                                Elements),
+        aae_controller:aae_fold(
+            Cntrl2, 
+            {key_range, Bucket, StartKey, EndKey},
+            all,
+            SCFoldFun, 
+            SCInitAcc,
+            Elements
+        ),
     SCF1 = SCFolder1(),
     SCF2 = SCFolder2(),
 
@@ -391,45 +416,52 @@ dual_store_compare_tester(InitialKeyCount, StoreType) ->
     io:format("Comparison through key range folder in ~w ms with results ~w~n", 
                 [timer:now_diff(os:timestamp(), SW2)/1000, SCF1]),
 
-
     % Confirm no differences when using different matching AAE exchanges
     SW3 = os:timestamp(),
 
     {ok, _P1, GUID1} = 
-        aae_exchange:start([{exchange_sendfun(Cntrl1), [{2,0}]}],
-                                [{exchange_sendfun(Cntrl2), [{3, 0}]}],
-                                RepairFun,
-                                ReturnFun),
+        aae_exchange:start(
+            [{exchange_sendfun(Cntrl1), [{2,0}]}],
+            [{exchange_sendfun(Cntrl2), [{3, 0}]}],
+            RepairFun,
+            ReturnFun
+        ),
     io:format("Exchange id ~s~n", [GUID1]),
     {ExchangeState1, 0} = testutil:start_receiver(),
     true = ExchangeState1 == root_compare,
 
     {ok, _P2, GUID2} = 
-        aae_exchange:start([{exchange_sendfun(Cntrl1), [{2,1}]}],
-                                [{exchange_sendfun(Cntrl2), [{3, 1}, {3, 2}]}],
-                                RepairFun,
-                                ReturnFun),
+        aae_exchange:start(
+            [{exchange_sendfun(Cntrl1), [{2,1}]}],
+            [{exchange_sendfun(Cntrl2), [{3, 1}, {3, 2}]}],
+            RepairFun,
+            ReturnFun
+        ),
     io:format("Exchange id ~s~n", [GUID2]),
     {ExchangeState2, 0} = testutil:start_receiver(),
     true = ExchangeState2 == root_compare,
 
     {ok, _P3, GUID3} = 
-        aae_exchange:start([{exchange_sendfun(Cntrl1), [{2, 0}, {2,1}]}],
-                                [{exchange_sendfun(Cntrl2), 
-                                    [{3, 0}, {3, 1}, {3, 2}]}],
-                                RepairFun,
-                                ReturnFun),
+        aae_exchange:start(
+            [{exchange_sendfun(Cntrl1), [{2, 0}, {2,1}]}],
+            [{exchange_sendfun(Cntrl2), [{3, 0}, {3, 1}, {3, 2}]}],
+            RepairFun,
+            ReturnFun
+        ),
     io:format("Exchange id ~s~n", [GUID3]),
     {ExchangeState3, 0} = testutil:start_receiver(),
     true = ExchangeState3 == root_compare,
 
     {ok, _P4, GUID4} = 
-        aae_exchange:start([{exchange_sendfun(Cntrl1), [{2,0}]}, 
-                                    {exchange_sendfun(Cntrl1), [{2,1}]}],
-                                [{exchange_sendfun(Cntrl2), 
-                                    [{3, 0}, {3, 1}, {3, 2}]}],
-                                RepairFun,
-                                ReturnFun),
+        aae_exchange:start(
+            [
+                {exchange_sendfun(Cntrl1), [{2,0}]},
+                {exchange_sendfun(Cntrl1), [{2,1}]}
+            ],
+            [{exchange_sendfun(Cntrl2), [{3, 0}, {3, 1}, {3, 2}]}],
+            RepairFun,
+            ReturnFun
+        ),
     io:format("Exchange id ~s~n", [GUID4]),
     {ExchangeState4, 0} = testutil:start_receiver(),
     true = ExchangeState4 == root_compare,
@@ -437,12 +469,15 @@ dual_store_compare_tester(InitialKeyCount, StoreType) ->
     BKVListN = create_discrepancy(Cntrl1, InitialKeyCount),
 
     {ok, _P6, GUID6} = 
-        aae_exchange:start([{exchange_sendfun(Cntrl1), [{2,0}]}, 
-                                    {exchange_sendfun(Cntrl1), [{2,1}]}],
-                                [{exchange_sendfun(Cntrl2), 
-                                    [{3, 0}, {3, 1}, {3, 2}]}],
-                                RepairFun,
-                                ReturnFun),
+        aae_exchange:start(
+            [
+                {exchange_sendfun(Cntrl1), [{2,0}]}, 
+                {exchange_sendfun(Cntrl1), [{2,1}]}
+            ],
+            [{exchange_sendfun(Cntrl2), [{3, 0}, {3, 1}, {3, 2}]}],
+            RepairFun,
+            ReturnFun
+        ),
     io:format("Exchange id ~s~n", [GUID6]),
     {ExchangeState6, 10} = testutil:start_receiver(),
     true = ExchangeState6 == clock_compare,
@@ -450,26 +485,30 @@ dual_store_compare_tester(InitialKeyCount, StoreType) ->
     % Same again, but request a missing partition, and should get same result
 
     {ok, _P6a, GUID6a} = 
-        aae_exchange:start([{exchange_sendfun(Cntrl1), [{2,0}]}, 
-                                    {exchange_sendfun(Cntrl1), [{2,1}]}],
-                                [{exchange_sendfun(Cntrl2), 
-                                    [{3, 0}, {3, 1}, {3, 2}, {3, 3}]}],
-                                RepairFun,
-                                ReturnFun),
+        aae_exchange:start(
+            [
+                {exchange_sendfun(Cntrl1), [{2,0}]}, 
+                {exchange_sendfun(Cntrl1), [{2,1}]}],
+            [{exchange_sendfun(Cntrl2), [{3, 0}, {3, 1}, {3, 2}, {3, 3}]}],
+            RepairFun,
+            ReturnFun
+        ),
     io:format("Exchange id ~s~n", [GUID6a]),
     {ExchangeState6a, 10} = testutil:start_receiver(),
     true = ExchangeState6a == clock_compare,
 
     {ok, _P6b, GUID6b} = 
-        aae_exchange:start(full,
-                            [{exchange_sendfun(Cntrl1), [{2,0}]}, 
-                                {exchange_sendfun(Cntrl1), [{2,1}]}],
-                            [{exchange_sendfun(Cntrl2), 
-                                [{3, 0}, {3, 1}, {3, 2}, {3, 3}]}],
-                            RepairFun,
-                            ReturnFun,
-                            none,
-                            [{scan_timeout, 0}, {max_results, 256}]),
+        aae_exchange:start(
+            full,
+            [
+                {exchange_sendfun(Cntrl1), [{2,0}]}, 
+                {exchange_sendfun(Cntrl1), [{2,1}]}],
+            [{exchange_sendfun(Cntrl2), [{3, 0}, {3, 1}, {3, 2}, {3, 3}]}],
+            RepairFun,
+            ReturnFun,
+            none,
+            [{scan_timeout, 0}, {max_results, 256}, {key_filter_fun, KFF}]
+        ),
     io:format("Exchange id ~s~n", [GUID6b]),
     {timeout, 0} = testutil:start_receiver(),
 
@@ -478,23 +517,29 @@ dual_store_compare_tester(InitialKeyCount, StoreType) ->
 
     RepairFun0 = testutil:repair_fun(BKVListN, Cntrl2, 3),
     {ok, _P7, GUID7} = 
-        aae_exchange:start([{exchange_sendfun(Cntrl1), [{2,0}]}, 
-                                    {exchange_sendfun(Cntrl1), [{2,1}]}],
-                                [{exchange_sendfun(Cntrl2), 
-                                    [{3, 0}, {3, 1}, {3, 2}]}],
-                                RepairFun0,
-                                ReturnFun),
+        aae_exchange:start(
+            [
+                {exchange_sendfun(Cntrl1), [{2,0}]}, 
+                {exchange_sendfun(Cntrl1), [{2,1}]}
+            ],
+            [{exchange_sendfun(Cntrl2), [{3, 0}, {3, 1}, {3, 2}]}],
+            RepairFun0,
+            ReturnFun
+        ),
     io:format("Exchange id ~s~n", [GUID7]),
     {ExchangeState7, 10} = testutil:start_receiver(),
     true = ExchangeState7 == clock_compare,
     
     {ok, _P8, GUID8} = 
-        aae_exchange:start([{exchange_sendfun(Cntrl1), [{2,0}]}, 
-                                    {exchange_sendfun(Cntrl1), [{2,1}]}],
-                                [{exchange_sendfun(Cntrl2), 
-                                    [{3, 0}, {3, 1}, {3, 2}]}],
-                                RepairFun,
-                                ReturnFun),
+        aae_exchange:start(
+            [
+                {exchange_sendfun(Cntrl1), [{2,0}]}, 
+                {exchange_sendfun(Cntrl1), [{2,1}]}
+            ],
+            [{exchange_sendfun(Cntrl2), [{3, 0}, {3, 1}, {3, 2}]}],
+            RepairFun,
+            ReturnFun
+        ),
     io:format("Exchange id ~s~n", [GUID8]),
     {ExchangeState8, 0} = testutil:start_receiver(),
     true = ExchangeState8 == root_compare,
@@ -532,32 +577,39 @@ initial_load(InitialKeyCount, Cntrl1, Cntrl2) ->
     ok = testutil:put_keys(Cntrl1, 2, BKVListR, undefined),
     ok = testutil:put_keys(Cntrl2, 3, BKVListR, undefined),
     
-    io:format("Initial put complete in ~w ms~n", 
-                [timer:now_diff(os:timestamp(), SW0)/1000]).
+    io:format(
+        "Initial put complete in ~w ms~n", 
+        [timer:now_diff(os:timestamp(), SW0)/1000]
+    ).
     
 
 create_discrepancy(Cntrl, InitialKeyCount) ->
     % Create a discrepancy and discover it through exchange
     BKVListN = testutil:gen_keys([], InitialKeyCount + 10, InitialKeyCount),
-    _SL = lists:foldl(fun({B, K, _V}, Acc) -> 
-                            BK = aae_util:make_binarykey(B, K),
-                            Seg = leveled_tictac:keyto_segment48(BK),
-                            Seg0 = aae_keystore:generate_treesegment(Seg),
-                            io:format("Generate new key B ~w K ~w " ++ 
-                                    "for Segment ~w ~w ~w partition ~w ~w~n",
-                                    [B, K, Seg0,  Seg0 bsr 8, Seg0 band 255, 
-                                        testutil:calc_preflist(K, 2), 
-                                        testutil:calc_preflist(K, 3)]),
-                            [Seg0|Acc]
-                        end,
-                        [],
-                        BKVListN),
+    _SL =
+        lists:foldl(
+            fun({B, K, _V}, Acc) -> 
+                BK = aae_util:make_binarykey(B, K),
+                Seg = leveled_tictac:keyto_segment48(BK),
+                Seg0 = aae_keystore:generate_treesegment(Seg),
+                io:format(
+                    "Generate new key B ~w K ~w "
+                    "for Segment ~w ~w ~w partition ~w ~w~n",
+                    [
+                        B, K, Seg0,  Seg0 bsr 8, Seg0 band 255, 
+                        testutil:calc_preflist(K, 2), 
+                        testutil:calc_preflist(K, 3)
+                    ]
+                ),
+                [Seg0|Acc]
+            end,
+            [],
+            BKVListN
+        ),
     ok = testutil:put_keys(Cntrl, 2, BKVListN),
     BKVListN.
 
-
 exchange_sendfun(Cntrl) -> testutil:exchange_sendfun(Cntrl).
-
 
 exchange_notsupported_sendfun() ->
     SendFun = 

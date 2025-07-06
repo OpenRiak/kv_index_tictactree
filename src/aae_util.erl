@@ -16,7 +16,7 @@
         get_opt/3,
         make_binarykey/2,
         safe_open/1,
-        apply_key_filter/3
+        apply_key_filter/2
     ]
 ).
 
@@ -117,6 +117,8 @@
             },
         ex010 =>
             {warning, <<"Exchange not_supported in exchange id=~s for colour=~w purpose=~w">>},
+        ex011 =>
+            {info, <<"Filtered clocks before comparison removing blue=~w pink =~w">>},
         ks001 => 
             {info, <<"Key Store loading with id=~w has reached deferred count=~w">>},
         ks002 =>
@@ -218,12 +220,14 @@ make_binarykey(Bucket, Key) when is_binary(Bucket), is_binary(Key) ->
 
 -spec apply_key_filter(
     aae_controller:key_filter_fun(),
-    aae_keystore:bucket(),
-    aae_keystore:key()) -> boolean().
-apply_key_filter(none, _Bucket, _Key) ->
+    {aae_keystore:bucket(), aae_keystore:key()} | reset)
+        -> boolean().
+apply_key_filter(none, _Input) ->
     true;
-apply_key_filter(KeyFilterFun, Bucket, Key) ->
-    KeyFilterFun(Bucket, Key).
+apply_key_filter(KeyFilterFun, {Bucket, Key}) ->
+    KeyFilterFun({Bucket, Key});
+apply_key_filter(KeyFilterFun, reset) ->
+    KeyFilterFun(reset).
 
 %%%============================================================================
 %%% Internal functions
