@@ -195,7 +195,8 @@
     log_levels :: aae_util:log_levels(),
     scan_timeout = ?SCAN_TIMEOUT_MS :: non_neg_integer(),
     max_results = ?MAX_RESULTS :: pos_integer(),
-    purpose :: atom() | undefined
+    purpose :: atom() | undefined,
+    key_filter = none :: aae_controller:key_include_fun()
 }).
 
 -type branch_results() :: list({integer(), binary()}).
@@ -228,7 +229,8 @@
     | {scan_timeout, non_neg_integer()}
     | {log_levels, aae_util:log_levels()}
     | {max_results, non_neg_integer()}
-    | {purpose, atom()}.
+    | {purpose, atom()}
+    | {key_filter, aae_controller:key_include_fun()}.
 -type options() :: list(option_item()).
 -type send_message() ::
     fetch_root
@@ -602,12 +604,35 @@ clock_compare(timeout, State = #state{repair_fun = RepairFun}) when
         [clock_compare, State#state.exchange_id],
         State#state.log_levels
     ),
+    BucketCountFun =
+        fun({B, _K, _C}, Acc) ->
+            maps:update_with(B, fun(V) -> V + 1 end, 1, Acc)
+        end,
+    BlueBuckets =
+        lists:foldl(BucketCountFun, maps:new(), State#state.blue_acc),
+    PinkBuckets =
+        lists:foldl(BucketCountFun, maps:new(), State#state.pink_acc),
+    aae_util:log(ex012, [BlueBuckets, PinkBuckets]),
     aae_util:log(
         ex008,
         [State#state.blue_acc, State#state.pink_acc],
         State#state.log_levels
     ),
-    RepairKeys = compare_clocks(State#state.blue_acc, State#state.pink_acc),
+    FilterFun =
+        fun({B, K, _VC}) ->
+            aae_util:maybe_include_key(State#state.key_filter, {B, K})
+        end,
+    FilteredBlues = lists:filter(FilterFun, State#state.blue_acc),
+    FilteredPinks = lists:filter(FilterFun, State#state.pink_acc),
+    aae_util:log(
+        ex011,
+        [
+            length(State#state.blue_acc) - length(FilteredBlues),
+            length(State#state.pink_acc) - length(FilteredPinks)
+        ],
+        State#state.log_levels
+    ),
+    RepairKeys = compare_clocks(FilteredBlues, FilteredPinks),
     aae_util:log(
         ex004,
         [State#state.exchange_id, State#state.purpose, length(RepairKeys)],
@@ -879,7 +904,11 @@ process_options([{max_results, MaxResults} | Tail], State) when
 process_options([{purpose, Purpose} | Tail], State) when
     is_atom(Purpose)
 ->
-    process_options(Tail, State#state{purpose = Purpose}).
+    process_options(Tail, State#state{purpose = Purpose});
+process_options([{key_filter, KIF} | Tail], State) when
+    is_function(KIF, 1)
+->
+    process_options(Tail, State#state{key_filter = KIF}).
 
 -spec trigger_next(
     any(),
