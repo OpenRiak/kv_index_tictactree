@@ -16,6 +16,7 @@
     make_binarykey/2,
     safe_open/1,
     filter_log_levels/1,
+    maybe_include_key/2,
     check_rootpath/1
 ]).
 
@@ -96,7 +97,7 @@
                 >>
             },
         ex004 =>
-            {info, <<"Exchange id=~s purpose=~w led to prompting  of repair_count=~w">>},
+            {info, <<"Exchange id=~s purpose=~w led to prompting of repair_count=~w">>},
         ex005 =>
             {info, <<"Exchange id=~s throttled count=~w at state=~w">>},
         ex006 =>
@@ -114,6 +115,10 @@
             },
         ex010 =>
             {warning, <<"Exchange not_supported in exchange id=~s for colour=~w purpose=~w">>},
+        ex011 =>
+            {info, <<"Filtered clocks before comparison removing blue=~w pink=~w">>},
+        ex012 =>
+            {info, <<"Bucket counts for blue ~0p pink ~0p">>},
         ks001 => 
             {info, <<"Key Store loading with id=~w has reached deferred count=~w">>},
         ks002 =>
@@ -228,6 +233,18 @@ make_binarykey({Type, Bucket}, Key) when
     <<Type/binary, Bucket/binary, Key/binary>>;
 make_binarykey(Bucket, Key) when is_binary(Bucket), is_binary(Key) ->
     <<Bucket/binary, Key/binary>>.
+
+-spec maybe_include_key(
+    aae_controller:key_include_fun(),
+    {aae_keystore:bucket(), aae_keystore:key()} | reset
+) ->
+    boolean().
+maybe_include_key(none, _Input) ->
+    true;
+maybe_include_key(KeyFilterFun, {Bucket, Key}) ->
+    KeyFilterFun({Bucket, Key});
+maybe_include_key(KeyFilterFun, reset) ->
+    KeyFilterFun(reset).
 
 %%%============================================================================
 %%% Internal functions
