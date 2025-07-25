@@ -47,7 +47,7 @@ The AAE exchange should work the same way if two partitions are bing compared, o
 
 ## Using the Library
 
-Following the [current tests](https://github.com/OpenRiak/kv_index_tictactree/blob/openriak-3.2/test/end_to_end/basic_SUITE.erl) presently provides the simplest guide to using the library.  There is also a [`mock_kv_vnode`](https://github.com/OpenRiak/kv_index_tictactree/blob/openriak-3.2/test/end_to_end/mock_kv_vnode.erl) process used in tests, and provides a sample view of how an `aae_controller` could be integrated.
+Following the [current tests](https://github.com/OpenRiak/kv_index_tictactree/blob/openriak-3.4/test/end_to_end/basic_SUITE.erl) presently provides the simplest guide to using the library.  There is also a [`mock_kv_vnode`](https://github.com/OpenRiak/kv_index_tictactree/blob/openriak-3.4/test/end_to_end/mock_kv_vnode.erl) process used in tests, and provides a sample view of how an `aae_controller` could be integrated.
 
 There are two main branches:
 
