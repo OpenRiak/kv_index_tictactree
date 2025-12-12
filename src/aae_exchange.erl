@@ -90,10 +90,16 @@
 -behaviour(gen_fsm).
 
 -compile(
-    {nowarn_deprecated_function, [
-        {gen_fsm, start, 3},
-        {gen_fsm, send_event, 2}
-    ]}
+    [
+        {
+            nowarn_deprecated_function,
+            [
+                {gen_fsm, start, 3},
+                {gen_fsm, send_event, 2}
+            ]
+        },
+        nowarn_deprecated_callback
+    ]
 ).
 
 -include("aae.hrl").
