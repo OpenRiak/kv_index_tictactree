@@ -902,48 +902,49 @@ compare_clocks(BlueList, PinkList) ->
 
     BlueDelta = ordsets:subtract(BlueSet, PinkSet),
     PinkDelta = ordsets:subtract(PinkSet, BlueSet),
-        % Want to subtract out from the Pink and Blue Sets any example where 
-        % both pink and blue are the same
-        %
-        % This should speed up the folding and key finding to provide the 
-        % joined list
+    % Want to subtract out from the Pink and Blue Sets any example where
+    % both pink and blue are the same
+    %
+    % This should speed up the folding and key finding to provide the
+    % joined list
 
-    BlueDeltaList = 
-        lists:reverse(
-            ordsets:fold(fun({B, K, VCB}, Acc) -> 
-                                % Assume for now that element may be only
-                                % blue
-                                [{{B, K}, {VCB, none}}|Acc] 
-                            end, 
-                            [], 
-                            BlueDelta)),
-        % BlueDeltaList is the output of compare clocks, assuming the item
-        % is only on the Blue side (so it compares the blue vector clock with 
-        % none)
-    
-    PinkEnrichFun =
-        fun({B, K, VCP}, Acc) ->
-            case lists:keyfind({B, K}, 1, Acc) of
-                {{B, K}, {VCB, none}} ->
-                    ElementWithClockDiff = 
-                        {{B, K}, {VCB, VCP}},
-                    lists:keyreplace({B, K}, 1, Acc, ElementWithClockDiff);
-                false ->
-                    ElementOnlyPink = 
-                        {{B, K}, {none, VCP}},
-                    lists:keysort(1, [ElementOnlyPink|Acc])
-            end
-        end,
-        % The Foldfun to be used on the PinkDelta, will now fill in the Pink 
-        % vector clock if the element also exists in Pink
-    
-    AllDeltaList = 
-        ordsets:fold(PinkEnrichFun, BlueDeltaList, PinkDelta),
-        % The accumulator starts with the Blue side only perspective, and 
-        % either adds to it or enriches it by folding over the Pink side 
-        % view 
-    
+    BlueDeltaMap =
+        maps:from_list(
+            lists:map(
+                fun({B, K, VCB}) ->
+                    % Assume for now that element may be only blue
+                    {{B, K}, {VCB, none}}
+                end,
+                ordsets:to_list(BlueDelta)
+            )
+        ),
+    % BlueDeltaList is the output of compare clocks, assuming the item
+    % is only on the Blue side (so it compares the blue vector clock with
+    % none)
+    % The Foldfun to be used on the PinkDelta, will now fill in the Pink
+    % vector clock if the element also exists in Pink
+
+    AllDeltaList = compare_foldfun(ordsets:to_list(PinkDelta), BlueDeltaMap),
+    % The accumulator starts with the Blue side only perspective, and
+    % either adds to it or enriches it by folding over the Pink side
+    % view
+
     AllDeltaList.
+
+compare_foldfun([], Acc) ->
+    maps:to_list(Acc);
+compare_foldfun([{B, K, VCP} | PinkDeltaTail], Acc) ->
+    case maps:get({B, K}, Acc, undefined) of
+        {VCB, none} ->
+            compare_foldfun(
+                PinkDeltaTail,
+                maps:put({B, K}, {VCB, VCP}, Acc)
+            );
+        undefined ->
+            compare_foldfun(
+                PinkDeltaTail, maps:put({B, K}, {none, VCP}, Acc)
+            )
+    end.
 
 
 -spec compare_trees(leveled_tictac:tictactree(),
@@ -970,12 +971,14 @@ intersect_ids(IDs0, IDs1) ->
 %% will wastefully correct the same data - so randomly chose one of the better
 %% lists
 select_ids(IDList, MaxOutput, StateName, ExchangeID, LogLevels)
-                                            when length(IDList) > MaxOutput ->
+        when length(IDList) > MaxOutput ->
     IDList0 = lists:sort(IDList),
-    aae_util:log("EX005", 
-                    [ExchangeID, length(IDList0), StateName],
-                    logs(),
-                    LogLevels),
+    aae_util:log(
+        "EX005", 
+        [ExchangeID, length(IDList0), StateName],
+        logs(),
+        LogLevels
+    ),
     IDList1 =
         lists:sublist(IDList0, 1 + length(IDList0) - MaxOutput),
     IDList2 =
@@ -986,8 +989,21 @@ select_ids(IDList, MaxOutput, StateName, ExchangeID, LogLevels)
         end,
     {_EndIdx, SpaceIdxL} =
         lists:foldl(FoldFun, {1, []}, lists:zip(IDList1, IDList2)),
-    Selections = 
-        lists:sublist(lists:sort(SpaceIdxL), MaxOutput),
+    Selections =
+        case length(SpaceIdxL) of
+            L when L > MaxOutput ->
+                {MaxResults, TailResults} =
+                    lists:split(MaxOutput, lists:sort(SpaceIdxL)),
+                {LastChosenScore, _LastChosenIdx} = lists:last(MaxResults),
+                TiedSelections =
+                    lists:takewhile(
+                        fun({S, _I}) -> S == LastChosenScore end,
+                        TailResults
+                    ),
+                MaxResults ++ TiedSelections;
+            _ ->
+                lists:sort(SpaceIdxL)
+        end,
     {_ChosenSpace, ChosenIdx} =
         lists:nth(leveled_rand:uniform(length(Selections)), Selections),
     lists:sublist(IDList0, ChosenIdx, MaxOutput);
@@ -1002,8 +1018,8 @@ jitter_pause(Timeout) ->
     leveled_rand:uniform(Timeout) + Timeout div 2.
 
 
--spec reset({pos_integer(), pos_integer()}) 
-                                        -> {non_neg_integer(), pos_integer()}.
+-spec reset(
+    {pos_integer(), pos_integer()}) -> {non_neg_integer(), pos_integer()}.
 %% @doc
 %% Rest the count back to 0
 reset({Target, Target}) -> {0, Target}. 
@@ -1111,6 +1127,25 @@ select_best_id_rand_test() ->
     ?assertMatch({true, true, true},
                     lists:foldl(F, {false, false, false}, lists:seq(1, 1000))).
 
+
+select_id_withties_test() ->
+    L0 = lists:seq(1, 1000),
+    RL = select_ids(L0, 32, root_confirm, "t0.0", undefined),
+    ?assertMatch(32, length(RL)),
+    Select100 =
+        lists:map(
+            fun(_I) -> 
+                hd(select_ids(L0, 32, root_confirm, "t0.1", undefined))
+            end,
+            lists:seq(1, 100)
+        ),
+    % Expect to see heads evenly distributed
+    % - check we see both above and below 500
+    Above500 = lists:filter(fun(H) -> H > 500 end, Select100),
+    Below500 = lists:filter(fun(H) -> H < 500 end, Select100),
+    ?assert(length(Above500) > 0),
+    ?assert(length(Below500) > 0).
+
 compare_clocks_test() ->
     KV1 = {<<"B1">>, <<"K1">>, [{a, 1}]},
     KV2 = {<<"B1">>, <<"K2">>, [{b, 1}]},
@@ -1190,6 +1225,61 @@ waiting_for_error_test() ->
                             #state{exchange_type = full,
                                     merge_fun = fun merge_clocks/2}).
 
+
+compare_clocks_timing_test_() ->
+    {timeout, 60, fun compare_clocks_timing_tester/0}.
+
+compare_clocks_timing_tester() ->
+    % Comapre two identical lists of different sizes
+    VC1 = [{a, 1}, {b, 3}, {c, 1}],
+    KVGenFun =
+        fun(I) ->
+            Key = <<"Key", I:32/integer>>,
+            {{<<"BuckeType">>, <<"BucketName">>}, Key, VC1}
+        end,
+    KVL1K = lists:map(KVGenFun, lists:seq(1, 1024)),
+    {T1K, R1K} = timer:tc(fun() -> compare_clocks(KVL1K, KVL1K) end),
+    KVL8K = lists:map(KVGenFun, lists:seq(1, 8192)),
+    {T8K, R8K} = timer:tc(fun() -> compare_clocks(KVL8K, KVL8K) end),
+    KVL32K = lists:map(KVGenFun, lists:seq(1, 32768)),
+    {T32K, R32K} = timer:tc(fun() -> compare_clocks(KVL32K, KVL32K) end),
+
+    ?assertMatch([], R1K),
+    ?assertMatch([], R8K),
+    ?assertMatch([], R32K),
+    io:format(
+        user,
+        "Comparison timings 1K ~w 8k ~w 32K ~w for identical lists~n",
+        [T1K, T8K, T32K]
+    ),
+
+    VC2 = [{a, 1}, {b, 3}, {c, 1}, {d, 10}],
+    KVDeltaFun =
+        fun(I) ->
+            VC =
+                case I rem 4 of
+                    0 -> VC2;
+                    _ -> VC1
+                end,
+            Key = <<"Key", I:32/integer>>,
+            {{<<"BuckeType">>, <<"BucketName">>}, Key, VC}
+        end,
+    KVL1KD = lists:map(KVDeltaFun, lists:seq(1, 1024)),
+    KVL8KD = lists:map(KVDeltaFun, lists:seq(1, 8192)),
+    KVL32KD = lists:map(KVDeltaFun, lists:seq(1, 32768)),
+
+    {T1KDB, R1KDB} = timer:tc(fun() -> compare_clocks(KVL1KD, KVL1K) end),
+    {T8KDB, R8KDB} = timer:tc(fun() -> compare_clocks(KVL8KD, KVL8K) end),
+    {T32KDB, R32KDB} = timer:tc(fun() -> compare_clocks(KVL32KD, KVL32K) end),
+
+    ?assertMatch(256, length(R1KDB)),
+    ?assertMatch(2048, length(R8KDB)),
+    ?assertMatch(8192, length(R32KDB)),
+    io:format(
+        user,
+        "Comparison timings 1K ~w 8k ~w 32K ~w for delta lists~n",
+        [T1KDB, T8KDB, T32KDB]
+    ).
 
 coverage_cheat_test() ->
     {next_state, prepare, _State0} =
