@@ -1047,16 +1047,18 @@ compare_clocks(BlueList, PinkList) ->
                 sets:to_list(BlueDelta)
             )
         ),
-    % BlueDeltaList is the output of compare clocks, assuming the item
+    % BlueDeltaMap is the output of compare clocks, assuming the item
     % is only on the Blue side (so it compares the blue vector clock with
     % none)
-    % The Foldfun to be used on the PinkDelta, will now fill in the Pink
-    % vector clock if the element also exists in Pink
-
+    
+    % The next stage is to see if there is a Pink vector clock for the B/K
+    % pair, in which case {VCB, VCP} will be the output for that pair.
     AllDeltaList = compare_foldfun(sets:to_list(PinkDelta), BlueDeltaMap),
     % The accumulator starts with the Blue side only perspective, and
     % either adds to it or enriches it by folding over the Pink side
-    % view
+    % view.
+    % Anything in Pink not Blue will have {none, VCP} as the output for that
+    % B/K pair.
 
     AllDeltaList.
 
@@ -1065,7 +1067,11 @@ compare_foldfun([], Acc) ->
     maps:to_list(Acc);
 compare_foldfun([{B, K, VCP} | PinkDeltaTail], Acc) ->
     case maps:get({B, K}, Acc, undefined) of
-        {VCB, none} ->
+        {VCB, _None} ->
+            % _None should always be none unless there are duplicate B/K pairs
+            % in the Pink List.  In that case we in effect take a random VC
+            % from the duplicate options, rather than crashing (by checking the
+            % result is none). 
             compare_foldfun(
                 PinkDeltaTail,
                 maps:put({B, K}, {VCB, VCP}, Acc)
