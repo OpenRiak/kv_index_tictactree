@@ -1050,7 +1050,7 @@ compare_clocks(BlueList, PinkList) ->
     % BlueDeltaMap is the output of compare clocks, assuming the item
     % is only on the Blue side (so it compares the blue vector clock with
     % none)
-    
+
     % The next stage is to see if there is a Pink vector clock for the B/K
     % pair, in which case {VCB, VCP} will be the output for that pair.
     AllDeltaList = compare_foldfun(sets:to_list(PinkDelta), BlueDeltaMap),
@@ -1071,7 +1071,7 @@ compare_foldfun([{B, K, VCP} | PinkDeltaTail], Acc) ->
             % _None should always be none unless there are duplicate B/K pairs
             % in the Pink List.  In that case we in effect take a random VC
             % from the duplicate options, rather than crashing (by checking the
-            % result is none). 
+            % result is none).
             compare_foldfun(
                 PinkDeltaTail,
                 maps:put({B, K}, {VCB, VCP}, Acc)
