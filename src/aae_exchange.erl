@@ -232,7 +232,8 @@
     | {max_results, non_neg_integer()}
     | {purpose, atom()}
     | {key_filter, aae_controller:key_include_fun()}
-    | {worthwhile_reduction, float()} % 0.0 <= WR =< 1.0
+    % 0.0 <= WR =< 1.0
+    | {worthwhile_reduction, float()}
     | {worthwhile_reduction_cached, non_neg_integer()}.
 -type options() :: list(option_item()).
 -type send_message() ::
