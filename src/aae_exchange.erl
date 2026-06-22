@@ -232,7 +232,7 @@
     | {max_results, non_neg_integer()}
     | {purpose, atom()}
     | {key_filter, aae_controller:key_include_fun()}
-    | {worthwhile_reduction, float()}
+    | {worthwhile_reduction, float()} % 0.0 <= WR =< 1.0
     | {worthwhile_reduction_cached, non_neg_integer()}.
 -type options() :: list(option_item()).
 -type send_message() ::
@@ -864,7 +864,7 @@ process_options([{worthwhile_reduction, WR} | Tail], State) when
 ->
     process_options(Tail, State#state{worthwhile_reduction = WR});
 process_options([{worthwhile_reduction_cached, WR} | Tail], State) when
-    is_integer(WR), WR > 0
+    is_integer(WR), WR >= 0
 ->
     process_options(Tail, State#state{worthwhile_reduction_cached = WR}).
 
