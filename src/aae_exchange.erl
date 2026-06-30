@@ -201,7 +201,9 @@
     scan_timeout = ?SCAN_TIMEOUT_MS :: non_neg_integer(),
     max_results = ?MAX_RESULTS :: pos_integer(),
     purpose :: atom() | undefined,
-    key_filter = none :: aae_controller:key_include_fun()
+    key_filter = none :: aae_controller:key_include_fun(),
+    worthwhile_reduction = ?WORTHWHILE_REDUCTION :: float(),
+    worthwhile_reduction_cached = ?WORTHWHILE_REDUCTION_CACHED :: non_neg_integer()
 }).
 
 -type branch_results() :: list({integer(), binary()}).
@@ -235,7 +237,10 @@
     | {log_levels, aae_util:log_levels()}
     | {max_results, non_neg_integer()}
     | {purpose, atom()}
-    | {key_filter, aae_controller:key_include_fun()}.
+    | {key_filter, aae_controller:key_include_fun()}
+    % 0.0 <= WR =< 1.0
+    | {worthwhile_reduction, float()}
+    | {worthwhile_reduction_cached, non_neg_integer()}.
 -type options() :: list(option_item()).
 -type send_message() ::
     fetch_root
@@ -253,7 +258,10 @@
 % target.  The Preflist might be {Index, Node} for remote requests or
 % {Index, Pid} for local requests
 % For partial exchanges only, the preflist can and must be set to 'all'
--type repair_input() :: {{any(), any()}, {any(), any()}}.
+-type repair_id() :: {any(), any()}.
+-type repair_clock_comparator() :: {any() | none, any() | none}.
+-type repair_input() :: {repair_id(), repair_clock_comparator()}.
+-type repair_map() :: #{repair_id() => repair_clock_comparator()}.
 % {{Bucket, Key}, {BlueClock, PinkClock}}.
 -type repair_fun() :: fun((list(repair_input())) -> ok).
 % Input will be Bucket, Key, Clock
@@ -261,6 +269,7 @@
 
 -define(FILTERIDX_SEG, 5).
 -define(FILTERIDX_TRS, 4).
+-define(SETVER, [{version, 2}]).
 
 -export_type([send_fun/0, repair_fun/0, reply_fun/0, filters/0]).
 
@@ -400,8 +409,8 @@ tree_compare(timeout, State = #state{exchange_filters = Filters}) when
     % can be applied to accelerate the process.
     TreeSize = element(?FILTERIDX_TRS, Filters),
     case
-        ((length(StillDirtyLeaves) > 0) and
-            (Reduction > ?WORTHWHILE_REDUCTION))
+        ((length(StillDirtyLeaves) > 0) andalso
+            (Reduction > State#state.worthwhile_reduction))
     of
         true ->
             % Keep comparing trees, this is reducing the segments we will
@@ -467,7 +476,7 @@ root_compare(timeout, State) ->
     {BranchIDs, Reduction} =
         case State#state.last_root_compare of
             none ->
-                {DirtyBranches, DirtyBranches};
+                {DirtyBranches, length(DirtyBranches)};
             PreviouslyDirtyBranches ->
                 BDL = intersect_ids(PreviouslyDirtyBranches, DirtyBranches),
                 {BDL, length(BDL) - length(PreviouslyDirtyBranches)}
@@ -476,8 +485,8 @@ root_compare(timeout, State) ->
     % reducing the result set sufficiently, keep doing it until we switch to
     % branch_compare
     case
-        ((length(BranchIDs) > 0) and
-            (Reduction > ?WORTHWHILE_REDUCTION_CACHED))
+        ((length(BranchIDs) > 0) andalso
+            (Reduction > State#state.worthwhile_reduction_cached))
     of
         true ->
             trigger_next(
@@ -524,7 +533,7 @@ branch_compare(timeout, State) ->
     {SegmentIDs, Reduction} =
         case State#state.last_branch_compare of
             none ->
-                {DirtySegments, DirtySegments};
+                {DirtySegments, length(DirtySegments)};
             PreviouslyDirtySegments ->
                 SDL = intersect_ids(PreviouslyDirtySegments, DirtySegments),
                 {SDL, length(SDL) - length(PreviouslyDirtySegments)}
@@ -533,8 +542,8 @@ branch_compare(timeout, State) ->
     % reducing the result set sufficiently, keep doing it until we switch to
     % branch_compare
     case
-        ((length(SegmentIDs) > 0) and
-            (Reduction > ?WORTHWHILE_REDUCTION_CACHED))
+        ((length(SegmentIDs) > 0) andalso
+            (Reduction > State#state.worthwhile_reduction_cached))
     of
         true ->
             trigger_next(
@@ -860,7 +869,15 @@ process_options([{purpose, Purpose} | Tail], State) when
 process_options([{key_filter, KIF} | Tail], State) when
     is_function(KIF, 1)
 ->
-    process_options(Tail, State#state{key_filter = KIF}).
+    process_options(Tail, State#state{key_filter = KIF});
+process_options([{worthwhile_reduction, WR} | Tail], State) when
+    is_float(WR), WR >= 0.0, WR =< 1.0
+->
+    process_options(Tail, State#state{worthwhile_reduction = WR});
+process_options([{worthwhile_reduction_cached, WR} | Tail], State) when
+    is_integer(WR), WR >= 0
+->
+    process_options(Tail, State#state{worthwhile_reduction_cached = WR}).
 
 -spec trigger_next(
     any(),
@@ -1028,56 +1045,59 @@ compare_clocks(BlueList, PinkList) ->
     % Two lists of {B, K, VC} want to remove everything where {B, K, VC} is
     % the same in both lists
     SortClockFun = fun({B, K, VC}) -> {B, K, refine_clock(VC)} end,
-    BlueSet = ordsets:from_list(lists:map(SortClockFun, BlueList)),
-    PinkSet = ordsets:from_list(lists:map(SortClockFun, PinkList)),
+    BlueSet = sets:from_list(lists:map(SortClockFun, BlueList), ?SETVER),
+    PinkSet = sets:from_list(lists:map(SortClockFun, PinkList), ?SETVER),
 
-    BlueDelta = ordsets:subtract(BlueSet, PinkSet),
-    PinkDelta = ordsets:subtract(PinkSet, BlueSet),
+    BlueDelta = sets:subtract(BlueSet, PinkSet),
+    PinkDelta = sets:subtract(PinkSet, BlueSet),
     % Want to subtract out from the Pink and Blue Sets any example where
     % both pink and blue are the same
     %
     % This should speed up the folding and key finding to provide the
     % joined list
 
-    BlueDeltaList =
-        lists:map(
-            fun({B, K, VCB}) ->
-                % Assume for now that element may be only blue
-                {{B, K}, {VCB, none}}
-            end,
-            ordsets:to_list(BlueDelta)
+    BlueDeltaMap =
+        maps:from_list(
+            lists:map(
+                fun({B, K, VCB}) ->
+                    % Assume for now that element may be only blue
+                    {{B, K}, {VCB, none}}
+                end,
+                sets:to_list(BlueDelta)
+            )
         ),
-    % BlueDeltaList is the output of compare clocks, assuming the item
+    % BlueDeltaMap is the output of compare clocks, assuming the item
     % is only on the Blue side (so it compares the blue vector clock with
     % none)
-    % The Foldfun to be used on the PinkDelta, will now fill in the Pink
-    % vector clock if the element also exists in Pink
 
-    AllDeltaList = compare_foldfun(ordsets:to_list(PinkDelta), BlueDeltaList),
+    % The next stage is to see if there is a Pink vector clock for the B/K
+    % pair, in which case {VCB, VCP} will be the output for that pair.
+    AllDeltaList = compare_foldfun(sets:to_list(PinkDelta), BlueDeltaMap),
     % The accumulator starts with the Blue side only perspective, and
     % either adds to it or enriches it by folding over the Pink side
-    % view
+    % view.
+    % Anything in Pink not Blue will have {none, VCP} as the output for that
+    % B/K pair.
 
     AllDeltaList.
 
--spec compare_foldfun(list(tuple()), list(repair_input())) ->
-    list(repair_input()).
+-spec compare_foldfun(list(tuple()), repair_map()) -> list(repair_input()).
 compare_foldfun([], Acc) ->
-    Acc;
+    maps:to_list(Acc);
 compare_foldfun([{B, K, VCP} | PinkDeltaTail], Acc) ->
-    case lists:keyfind({B, K}, 1, Acc) of
-        {{B, K}, {VCB, none}} ->
-            ElementWithClockDiff =
-                {{B, K}, {VCB, VCP}},
+    case maps:get({B, K}, Acc, undefined) of
+        {VCB, _None} ->
+            % _None should always be none unless there are duplicate B/K pairs
+            % in the Pink List.  In that case we in effect take a random VC
+            % from the duplicate options, rather than crashing (by checking the
+            % result is none).
             compare_foldfun(
                 PinkDeltaTail,
-                lists:keyreplace({B, K}, 1, Acc, ElementWithClockDiff)
+                maps:put({B, K}, {VCB, VCP}, Acc)
             );
-        false ->
-            ElementOnlyPink =
-                {{B, K}, {none, VCP}},
+        undefined ->
             compare_foldfun(
-                PinkDeltaTail, lists:keysort(1, [ElementOnlyPink | Acc])
+                PinkDeltaTail, maps:put({B, K}, {none, VCP}, Acc)
             )
     end.
 
@@ -1248,6 +1268,61 @@ select_id_withties_test() ->
     ?assert(length(Above500) > 0),
     ?assert(length(Below500) > 0).
 
+compare_clocks_timing_test_() ->
+    {timeout, 60, fun compare_clocks_timing_tester/0}.
+
+compare_clocks_timing_tester() ->
+    % Comapre two identical lists of different sizes
+    VC1 = [{a, 1}, {b, 3}, {c, 1}],
+    KVGenFun =
+        fun(I) ->
+            Key = <<"Key", I:32/integer>>,
+            {{<<"BuckeType">>, <<"BucketName">>}, Key, VC1}
+        end,
+    KVL1K = lists:map(KVGenFun, lists:seq(1, 1024)),
+    {T1K, R1K} = timer:tc(fun() -> compare_clocks(KVL1K, KVL1K) end),
+    KVL8K = lists:map(KVGenFun, lists:seq(1, 8192)),
+    {T8K, R8K} = timer:tc(fun() -> compare_clocks(KVL8K, KVL8K) end),
+    KVL32K = lists:map(KVGenFun, lists:seq(1, 32768)),
+    {T32K, R32K} = timer:tc(fun() -> compare_clocks(KVL32K, KVL32K) end),
+
+    ?assertMatch([], R1K),
+    ?assertMatch([], R8K),
+    ?assertMatch([], R32K),
+    io:format(
+        user,
+        "Comparison timings 1K ~w 8k ~w 32K ~w for identical lists~n",
+        [T1K, T8K, T32K]
+    ),
+
+    VC2 = [{a, 1}, {b, 3}, {c, 1}, {d, 10}],
+    KVDeltaFun =
+        fun(I) ->
+            VC =
+                case I rem 4 of
+                    0 -> VC2;
+                    _ -> VC1
+                end,
+            Key = <<"Key", I:32/integer>>,
+            {{<<"BuckeType">>, <<"BucketName">>}, Key, VC}
+        end,
+    KVL1KD = lists:map(KVDeltaFun, lists:seq(1, 1024)),
+    KVL8KD = lists:map(KVDeltaFun, lists:seq(1, 8192)),
+    KVL32KD = lists:map(KVDeltaFun, lists:seq(1, 32768)),
+
+    {T1KDB, R1KDB} = timer:tc(fun() -> compare_clocks(KVL1KD, KVL1K) end),
+    {T8KDB, R8KDB} = timer:tc(fun() -> compare_clocks(KVL8KD, KVL8K) end),
+    {T32KDB, R32KDB} = timer:tc(fun() -> compare_clocks(KVL32KD, KVL32K) end),
+
+    ?assertMatch(256, length(R1KDB)),
+    ?assertMatch(2048, length(R8KDB)),
+    ?assertMatch(8192, length(R32KDB)),
+    io:format(
+        user,
+        "Comparison timings 1K ~w 8k ~w 32K ~w for delta lists~n",
+        [T1KDB, T8KDB, T32KDB]
+    ).
+
 compare_clocks_test() ->
     KV1 = {<<"B1">>, <<"K1">>, [{a, 1}]},
     KV2 = {<<"B1">>, <<"K2">>, [{b, 1}]},
@@ -1294,6 +1369,143 @@ clean_exit_ontimeout_test() ->
     },
     State1 = State0#state{pending_state = timeout},
     {stop, normal, State1} = waiting_all_results(timeout, State0).
+
+avoid_multiple_merge_test() ->
+    EmptyP = leveled_tictac:new_tree(pink, xxsmall),
+    EmptyB = leveled_tictac:new_tree(blue, xxsmall),
+    PT = leveled_tictac:alter_segment(1, 1, EmptyP),
+    BT = leveled_tictac:alter_segment(1, 2, EmptyB),
+    Tester = self(),
+
+    SendFun =
+        fun
+            ({merge_tree_range, _, _, _, _, _, _}, _PLs, pink) ->
+                Exchange = self(),
+                Tester ! {merge_tree_range, pink},
+                reply(Exchange, PT, pink);
+            ({merge_tree_range, _, _, _, _, _, _}, _PLs, blue) ->
+                Exchange = self(),
+                Tester ! {merge_tree_range, blue},
+                reply(Exchange, BT, blue);
+            ({fetch_clocks_range, _, _, _, _}, _PLs, Colour) ->
+                Exchange = self(),
+                Tester ! {fetch_clocks, Colour},
+                reply(Exchange, [], Colour)
+        end,
+    BlueL = [{SendFun, [{0, 1}]}],
+    PinkL = [{SendFun, [{0, 1}]}],
+    RepairFun = fun(_RL) -> ok end,
+    ReplyFun = fun(R) -> Tester ! {finish, R} end,
+    Filters = {filter, all, all, xxsmall, all, all, pre_hash},
+    Opts = [{transition_pause_ms, 10}],
+
+    start(partial, BlueL, PinkL, RepairFun, ReplyFun, Filters, Opts),
+    Msgs = receive_loop([]),
+    ?assertMatch(7, length(Msgs)),
+    ?assertMatch({clock_compare, 0}, hd(Msgs)),
+
+    % Set worthwhile reduction to 1.0, and there will be only one cycle of
+    % merge_tree_range
+    WR = {worthwhile_reduction, 1.0},
+    start(partial, BlueL, PinkL, RepairFun, ReplyFun, Filters, [WR | Opts]),
+    Msgs2 = receive_loop([]),
+    ?assertMatch(5, length(Msgs2)),
+    ?assertMatch({clock_compare, 0}, hd(Msgs2)).
+
+avoid_multiple_root_test() ->
+    PR = <<1:256/integer>>,
+    PB = [{1, <<1:256/integer>>}],
+    BR = <<0:256/integer>>,
+    BB = [{1, <<0:256/integer>>}],
+    Tester = self(),
+
+    SendFun =
+        fun
+            (fetch_root, _PLs, pink) ->
+                Exchange = self(),
+                Tester ! {fetch_root, pink},
+                reply(Exchange, PR, pink);
+            (fetch_root, _PLs, blue) ->
+                Exchange = self(),
+                Tester ! {fetch_root, blue},
+                reply(Exchange, BR, blue);
+            ({fetch_branches, _}, _PLs, pink) ->
+                Exchange = self(),
+                Tester ! {fetch_branches, pink},
+                reply(Exchange, PB, pink);
+            ({fetch_branches, _}, _PLs, blue) ->
+                Exchange = self(),
+                Tester ! {fetch_branches, blue},
+                reply(Exchange, BB, blue);
+            ({fetch_clocks, _}, _PLs, Colour) ->
+                Exchange = self(),
+                Tester ! {fetch_clocks, Colour},
+                reply(Exchange, [], Colour)
+        end,
+    BlueList = [{SendFun, [{0, 1}]}],
+    PinkList = [{SendFun, [{0, 1}]}],
+    RepairFun = fun(_RL) -> ok end,
+    ReplyFun = fun(R) -> Tester ! {finish, R} end,
+    Opts = [{transition_pause_ms, 10}],
+
+    start(full, BlueList, PinkList, RepairFun, ReplyFun, none, Opts),
+    Msgs = receive_loop([]),
+    ?assertMatch(11, length(Msgs)),
+    ?assertMatch({clock_compare, 0}, hd(Msgs)),
+
+    % Set worthwhile reduction to 10, and there will be only one cycle of
+    % fetch_root, and one of fetch_branches
+    WR = {worthwhile_reduction_cached, 10},
+    start(full, BlueList, PinkList, RepairFun, ReplyFun, none, [WR | Opts]),
+    Msgs2 = receive_loop([]),
+    ?assertMatch(7, length(Msgs2)),
+    ?assertMatch({clock_compare, 0}, hd(Msgs2)).
+
+transition_root_to_branch_compare_test() ->
+    % It is possible to match branches when roots mismatch, prove that this
+    % returns {branch_compare, 0 as expected}
+    PR = <<1:256/integer>>,
+    PB = [{1, <<1:256/integer>>}],
+    BR = <<0:256/integer>>,
+    BB = [{1, <<1:256/integer>>}],
+    Tester = self(),
+
+    SendFun =
+        fun
+            (fetch_root, _PLs, pink) ->
+                Exchange = self(),
+                Tester ! {fetch_root, pink},
+                reply(Exchange, PR, pink);
+            (fetch_root, _PLs, blue) ->
+                Exchange = self(),
+                Tester ! {fetch_root, blue},
+                reply(Exchange, BR, blue);
+            ({fetch_branches, _}, _PLs, pink) ->
+                Exchange = self(),
+                Tester ! {fetch_branches, pink},
+                reply(Exchange, PB, pink);
+            ({fetch_branches, _}, _PLs, blue) ->
+                Exchange = self(),
+                Tester ! {fetch_branches, blue},
+                reply(Exchange, BB, blue)
+        end,
+    BlueList = [{SendFun, [{0, 1}]}],
+    PinkList = [{SendFun, [{0, 1}]}],
+    RepairFun = fun(_RL) -> ok end,
+    ReplyFun = fun(R) -> Tester ! {finish, R} end,
+    Opts = [{transition_pause_ms, 10}],
+
+    start(full, BlueList, PinkList, RepairFun, ReplyFun, none, Opts),
+    Msgs = receive_loop([]),
+    ?assertMatch({branch_compare, 0}, hd(Msgs)).
+
+receive_loop(Acc) ->
+    receive
+        {finish, Msg} ->
+            [Msg | Acc];
+        Msg ->
+            receive_loop([Msg | Acc])
+    end.
 
 connect_error_test() ->
     SendFun =
