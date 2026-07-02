@@ -1478,7 +1478,7 @@ rebuild_fold(PreflistClockFun, ObjectSplitFun, HandleBadObjFun, FlushFun) ->
                     [ObjSpec | Acc]
             end
         catch
-            Error:Reason ->
+            Error:Reason when Error =/= exit ->
                 HandleBadObjFun(B, K, Error, Reason),
                 Acc
         end
