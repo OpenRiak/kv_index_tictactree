@@ -2,13 +2,13 @@
 %%
 %% There are two primary types of exchange sorted
 %% - a full exchange aimed at implementations with cached trees, where the
-%% cached trees represent all the data in the location, and the comparion is
+%% cached trees represent all the data in the location, and the comparison is
 %% between two complete data sets
 %% - a partial exchange where it is expected that trees will be dynamically
 %% created covering a subset of data within the location
 %%
 %% The full exchange assumes access to cached trees, with a low cost of
-%% repeated access, and a relatively high proportion fo the overall cost in
+%% repeated access, and a relatively high proportion of the overall cost in
 %% network bandwitdh.  These exchanges go through the following process:
 %%
 %% - Root Compare (x n)
@@ -87,20 +87,7 @@
 
 -module(aae_exchange).
 
--behaviour(gen_fsm).
-
--compile(
-    [
-        {
-            nowarn_deprecated_function,
-            [
-                {gen_fsm, start, 3},
-                {gen_fsm, send_event, 2}
-            ]
-        },
-        nowarn_deprecated_callback
-    ]
-).
+-behaviour(gen_statem).
 
 -include("aae.hrl").
 
@@ -135,21 +122,20 @@
 
 -export([
     init/1,
-    handle_sync_event/4,
-    handle_event/3,
-    handle_info/3,
+    callback_mode/0,
     terminate/3,
-    code_change/4
+    format_status/1
 ]).
 
 -export([
-    waiting_all_results/2,
-    prepare_full_exchange/2,
-    prepare_partial_exchange/2,
-    root_compare/2,
-    branch_compare/2,
-    clock_compare/2,
-    tree_compare/2,
+    waiting_all_results/3,
+    prepare_full_exchange/3,
+    prepare_partial_exchange/3,
+    root_compare/3,
+    branch_compare/3,
+    clock_compare/3,
+    tree_compare/3,
+
     merge_root/2,
     merge_branches/2
 ]).
@@ -168,6 +154,11 @@
     start/7,
     reply/3
 ]).
+
+-export_type([send_fun/0, repair_fun/0, reply_fun/0, filters/0]).
+
+callback_mode() ->
+    state_functions.
 
 -record(state, {
     root_compare_deltas = [] :: list(),
@@ -271,8 +262,6 @@
 -define(FILTERIDX_TRS, 4).
 -define(SETVER, [{version, 2}]).
 
--export_type([send_fun/0, repair_fun/0, reply_fun/0, filters/0]).
-
 %%%============================================================================
 %%% API
 %%%============================================================================
@@ -300,7 +289,7 @@ start(BlueList, PinkList, RepairFun, ReplyFun) ->
 %% closing state and the cout of deltas.
 start(Type, BlueList, PinkList, RepairFun, ReplyFun, Filters, Opts) ->
     ExchangeID = leveled_util:generate_uuid(),
-    {ok, ExPID} = gen_fsm:start(
+    {ok, ExPID} = gen_statem:start(
         ?MODULE,
         [
             {Type, Filters},
@@ -316,12 +305,10 @@ start(Type, BlueList, PinkList, RepairFun, ReplyFun, Filters, Opts) ->
     {ok, ExPID, ExchangeID}.
 
 -spec reply(pid(), any(), pink | blue) -> ok.
-%% @doc
-%% Support events to be sent back to the FSM
 reply(Exchange, {error, Error}, _Colour) ->
-    gen_fsm:send_event(Exchange, {error, Error});
+    gen_statem:cast(Exchange, {error, Error});
 reply(Exchange, Result, Colour) ->
-    gen_fsm:send_event(Exchange, {reply, Result, Colour}).
+    gen_statem:cast(Exchange, {reply, Result, Colour}).
 
 %%%============================================================================
 %%% gen_fsm callbacks
@@ -358,7 +345,7 @@ init([
         end,
     {ok, InitState, State0, 0}.
 
-prepare_full_exchange(timeout, State) ->
+prepare_full_exchange(timeout, _, State) ->
     ?STD_LOG(ex006, [prepare_tree_exchange, State#state.exchange_id]),
     trigger_next(
         fetch_root,
@@ -371,7 +358,7 @@ prepare_full_exchange(timeout, State) ->
     ).
 
 prepare_partial_exchange(
-    timeout, State = #state{exchange_filters = Filters}
+    timeout, _, State = #state{exchange_filters = Filters}
 ) when Filters =/= none ->
     ?STD_LOG(ex006, [prepare_partial_exchange, State#state.exchange_id]),
     Filters = State#state.exchange_filters,
@@ -387,7 +374,7 @@ prepare_partial_exchange(
         State
     ).
 
-tree_compare(timeout, State = #state{exchange_filters = Filters}) when
+tree_compare(timeout, _, State = #state{exchange_filters = Filters}) when
     Filters =/= none
 ->
     ?STD_LOG(ex006, [root_compare, State#state.exchange_id]),
@@ -469,7 +456,7 @@ tree_compare(timeout, State = #state{exchange_filters = Filters}) when
             )
     end.
 
-root_compare(timeout, State) ->
+root_compare(timeout, _, State) ->
     ?STD_LOG(ex006, [root_compare, State#state.exchange_id]),
     DirtyBranches = compare_roots(State#state.blue_acc, State#state.pink_acc),
     RootCompares = State#state.root_compares + 1,
@@ -524,7 +511,7 @@ root_compare(timeout, State) ->
             )
     end.
 
-branch_compare(timeout, State) ->
+branch_compare(timeout, _, State) ->
     ?STD_LOG(ex006, [branch_compare, State#state.exchange_id]),
     DirtySegments = compare_branches(
         State#state.blue_acc, State#state.pink_acc
@@ -583,7 +570,7 @@ branch_compare(timeout, State) ->
     end.
 
 clock_compare(
-    timeout, State = #state{repair_fun = RepairFun, exchange_id = ExId}
+    timeout, _, State = #state{repair_fun = RepairFun, exchange_id = ExId}
 ) when
     ?IS_DEF(RepairFun)
 ->
@@ -612,12 +599,44 @@ clock_compare(
     RepairFun(RepairKeys),
     {stop, normal, State#state{key_deltas = RepairKeys}}.
 
-waiting_all_results({reply, not_supported, Colour}, State) ->
+%% This special function clause is an interim workaround that should
+%% be removed once riak_kv_vnode:aae_send/1 is modified to send a
+%% statem-specific message.
+%%
+%% Martin Sumner explains
+%% (https://github.com/OpenRiak/kv_index_tictactree/pull/17#issuecomment-5696293088):
+%%
+%% When the exchange is initiated it is passed an AAE send fun (to be
+%% used by remote processes to reply to the exchange), within Riak
+%% this is generated from riak_kv_vnode:aae_send/1.
+%%
+%% When this is called by the exchange, it creates the sender to be
+%% used for response messages as `{fsm, undefined, self()}`. So the
+%% exchange is identified as an FSM (not a STATEM) within Riak.
+%%
+%% When the vnode processes an AAE message (e.g. a request to
+%% fetch_root), it will response with riak_core_vnode:reply/2.  This
+%% will use riak_core_send_msg:bang_unreliable/2 with `{'$gen_event',
+%% Event}` as the 2nd arg.
+%%
+%% So when used in Riak the responses that are expected in the
+%% waiting_all_results state will be received as messages to a gen_fsm
+%% not a gen_statem. Hence they arrive as standard process info
+%% messages, which then need to be considered as cast responses used
+%% when kv_index_tictcatree is tested as a standalone application.
+%%
+%% Although this is a bit hacky ... riak_core doesn't have message
+%% handling for gen_statem at present; and also during transition an
+%% exchange could be either a gen_fsm or a gen_statem. So it probably
+%% makes sense to use this workaround for now.
+waiting_all_results(info, {'$gen_event', Reply}, State) ->
+    waiting_all_results(cast, Reply, State);
+waiting_all_results(cast, {reply, not_supported, Colour}, State) ->
     ?STD_LOG(ex010, [State#state.exchange_id, Colour, State#state.purpose]),
     {stop, normal, State#state{pending_state = not_supported}};
-waiting_all_results({reply, {error, Reason}, _Colour}, State) ->
-    waiting_all_results({error, Reason}, State);
-waiting_all_results({reply, Result, Colour}, State) ->
+waiting_all_results(cast, {reply, {error, Reason}, _Colour}, State) ->
+    waiting_all_results(cast, {error, Reason}, State);
+waiting_all_results(cast, {reply, Result, Colour}, State) ->
     ?STD_LOG(ex007, [Colour, State#state.exchange_id]),
     {PC, PT} = State#state.pink_returns,
     {BC, BT} = State#state.blue_returns,
@@ -645,16 +664,20 @@ waiting_all_results({reply, Result, Colour}, State) ->
         end,
     case AllBlue and AllPink of
         true ->
-            {next_state, State0#state.pending_state, State0,
-                jitter_pause(State#state.transition_pause_ms)};
+            Timeout =
+                jitter_pause(State#state.transition_pause_ms),
+            {next_state, State0#state.pending_state, State0, Timeout};
         false ->
-            {next_state, waiting_all_results, State0,
+            Timeout =
                 set_timeout(
                     State0#state.start_time,
                     State0#state.reply_timeout
-                )}
+                ),
+            {next_state, waiting_all_results, State0, Timeout}
     end;
-waiting_all_results(UnexpectedResponse, State) ->
+waiting_all_results(CastOrTimeout, UnexpectedResponse, State) when
+    CastOrTimeout =:= cast; CastOrTimeout =:= timeout
+->
     % timeout expected here, but also may get errors from vnode - such as
     % {error, mailbox_overload} when vnode has entered overload state.  Not
     % possible to complete exchange so stop
@@ -672,22 +695,13 @@ waiting_all_results(UnexpectedResponse, State) ->
         ]
     ),
     ReplyState =
-        case UnexpectedResponse of
+        case CastOrTimeout of
             timeout ->
                 timeout;
             _ ->
                 error
         end,
     {stop, normal, State#state{pending_state = ReplyState}}.
-
-handle_sync_event(_msg, _From, StateName, State) ->
-    {reply, ok, StateName, State}.
-
-handle_event(_Msg, StateName, State) ->
-    {next_state, StateName, State}.
-
-handle_info(_Msg, StateName, State) ->
-    {next_state, StateName, State}.
 
 terminate(normal, StateName, State = #state{reply_fun = ReplyFun}) when
     ?IS_DEF(ReplyFun)
@@ -765,8 +779,20 @@ terminate(normal, StateName, State = #state{reply_fun = ReplyFun}) when
     end,
     ReplyFun({State#state.pending_state, length(State#state.key_deltas)}).
 
-code_change(_OldVsn, StateName, State, _Extra) ->
-    {ok, StateName, State}.
+-spec format_status(State) -> State when State :: #{state => #state{}}.
+format_status(
+    SState = #{state := State = #state{blue_acc = BA, pink_acc = PA}}
+) ->
+    SState#{
+        state => State#state{
+            blue_acc = accfmt(BA),
+            pink_acc = accfmt(PA)
+        }
+    }.
+accfmt(undefined) ->
+    undefined;
+accfmt(A) ->
+    lists:flatten(io_lib:format("~b items", [length(A)])).
 
 %%%============================================================================
 %%% External Functions
@@ -1368,7 +1394,7 @@ clean_exit_ontimeout_test() ->
         exchange_type = full
     },
     State1 = State0#state{pending_state = timeout},
-    {stop, normal, State1} = waiting_all_results(timeout, State0).
+    {stop, normal, State1} = waiting_all_results(timeout, 0, State0).
 
 avoid_multiple_merge_test() ->
     EmptyP = leveled_tictac:new_tree(pink, xxsmall),
@@ -1547,6 +1573,7 @@ connect_error_test() ->
 waiting_for_error_test() ->
     {stop, normal, _S0} =
         waiting_all_results(
+            cast,
             {reply, {error, query_backlog}, blue},
             #state{
                 exchange_type = full,
@@ -1554,15 +1581,22 @@ waiting_for_error_test() ->
             }
         ).
 
-coverage_cheat_test() ->
-    {next_state, prepare, _State0} =
-        handle_event(null, prepare, #state{exchange_type = full}),
-    {reply, ok, prepare, _State1} =
-        handle_sync_event(null, nobody, prepare, #state{exchange_type = full}),
-    {next_state, prepare, _State2} =
-        handle_info(null, prepare, #state{exchange_type = full}),
-    {ok, prepare, _State3} =
-        code_change(null, prepare, #state{exchange_type = full}, null),
-    [root_compare, branch_compare] = insync_responses().
+for_coverages_sake_test() ->
+    [root_compare, branch_compare] =
+        insync_responses(),
+    {stop, normal, #state{pending_state = error}} =
+        waiting_all_results(info, {'$gen_event', unexpected_msg}, #state{
+            exchange_type = full
+        }),
+    {stop, normal, #state{pending_state = not_supported}} =
+        waiting_all_results(
+            cast, {reply, not_supported, some_colour}, #state{
+                exchange_type = full
+            }
+        ),
+    Status = #{
+        state => #state{blue_acc = [{1, <<"123">>}], exchange_type = full}
+    },
+    #{state := #state{blue_acc = "1 items"}} = format_status(Status).
 
 -endif.
