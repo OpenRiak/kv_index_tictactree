@@ -392,7 +392,7 @@ store_nativestart(Path, NativeStoreType, BackendPid, LogLevels) ->
 %% Get the startup metadata from the store
 store_startupdata(Pid) ->
     {LastRebuild, IsEmpty} =
-        gen_fsm:sync_send_event(Pid, startup_metadata, infinity),
+        gen_fsm:sync_send_all_state_event(Pid, startup_metadata, infinity),
     {ok, {LastRebuild, IsEmpty}, Pid}.
 
 -spec store_close(pid()) -> ok.
@@ -675,11 +675,6 @@ parallel(
 ) when ?IS_PARALLEL(StoreType) ->
     VV = do_fetchclock(StoreType, State#state.store, Bucket, Key),
     {reply, VV, parallel, State};
-parallel(startup_metadata, _From, State = #state{store_type = StoreType}) when
-    ?IS_PARALLEL(StoreType)
-->
-    IsEmpty = is_empty(StoreType, State#state.store),
-    {reply, {State#state.last_rebuild, IsEmpty}, parallel, State};
 parallel(Shutdown, _From, State = #state{store_type = StoreType}) when
     ?IS_PARALLEL(StoreType), Shutdown == close orelse Shutdown == destroy
 ->
@@ -703,8 +698,6 @@ native(
         Elements
     ),
     {reply, Result, native, State};
-native(startup_metadata, _From, State) ->
-    {reply, {State#state.last_rebuild, false}, native, State};
 native(Shutdown, _From, State) when Shutdown == close; Shutdown == destroy ->
     {stop, normal, ok, State}.
 
@@ -844,7 +837,18 @@ handle_sync_event(
 handle_sync_event(current_status, _From, StateName, State) ->
     {reply, {StateName, State#state.current_guid}, StateName, State};
 handle_sync_event(ping, _From, StateName, State) ->
-    {reply, pong, StateName, State}.
+    {reply, pong, StateName, State};
+handle_sync_event(
+    startup_metadata,
+    _From,
+    StateName,
+    State = #state{store_type = StoreType}) when ?IS_PARALLEL(StoreType)
+->
+    IsEmpty = is_empty(StoreType, State#state.store),
+    {reply, {State#state.last_rebuild, IsEmpty}, StateName, State};
+handle_sync_event(startup_metadata, _From, StateName, State)
+->
+    {reply, {State#state.last_rebuild, false}, StateName, State}.
 
 handle_event({log_level, LogLevels}, StateName, State) ->
     ok = aae_util:set_loglevel(LogLevels),

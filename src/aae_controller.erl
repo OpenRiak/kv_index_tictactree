@@ -1478,7 +1478,11 @@ rebuild_fold(PreflistClockFun, ObjectSplitFun, HandleBadObjFun, FlushFun) ->
                     [ObjSpec | Acc]
             end
         catch
-            Error:Reason ->
+            Error:Reason when Error =/= exit ->
+                %% It is assumed that if the error is an exit, the error is not
+                %% specific to this object (e.g. the backend has restarted). In
+                %% this case we do not catch the Exit, so that the process will
+                %% crash rather than repeatedly erroring on each object
                 HandleBadObjFun(B, K, Error, Reason),
                 Acc
         end
